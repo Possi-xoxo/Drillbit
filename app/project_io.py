@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image
 from .pattern_model import PatternModel
 
-PROJECT_VERSION=1
+PROJECT_VERSION=2
 
 def save_project(path,pattern,source=None,settings=None,editor_state=None):
     destination=Path(path)
@@ -16,14 +16,14 @@ def save_project(path,pattern,source=None,settings=None,editor_state=None):
     with zipfile.ZipFile(destination,"w",zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("project.json",json.dumps(payload,separators=(",",":")))
         if source is not None:
-            buffer=io.BytesIO();source.convert("RGB").save(buffer,"PNG");archive.writestr("source.png",buffer.getvalue())
+            buffer=io.BytesIO();source.save(buffer,"PNG");archive.writestr("source.png",buffer.getvalue())
     return destination
 
 def load_project(path,palette):
     with zipfile.ZipFile(path,"r") as archive:
         payload=json.loads(archive.read("project.json"))
-        if payload.get("format")!="Diamond Art Converter Project" or payload.get("version")!=PROJECT_VERSION:
+        if payload.get("format")!="Diamond Art Converter Project" or payload.get("version") not in (1,PROJECT_VERSION):
             raise ValueError("Unsupported project format or version.")
         pattern=PatternModel(payload["width"],payload["height"],payload["cell_ids"],palette,payload.get("metadata"),payload.get("initial_ids"))
-        source=Image.open(io.BytesIO(archive.read("source.png"))).convert("RGB") if payload.get("source_embedded") else None
+        source=Image.open(io.BytesIO(archive.read("source.png"))).convert("RGBA") if payload.get("source_embedded") else None
     return pattern,source,payload.get("settings",{}),payload.get("editor_state",{})

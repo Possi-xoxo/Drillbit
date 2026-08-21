@@ -3,7 +3,7 @@ from collections import deque
 def connected_components(pattern,code=None):
     seen=set(); result=[]
     for index,value in enumerate(pattern.cell_ids):
-        if index in seen or (code is not None and value!=code):continue
+        if index in seen or value is None or (code is not None and value!=code):continue
         queue=deque([index]);seen.add(index);component=[]
         while queue:
             current=queue.popleft();component.append(current);x=current%pattern.width;y=current//pattern.width

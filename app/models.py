@@ -20,6 +20,8 @@ class ConversionSettings:
     contrast: int = 0
     saturation: int = 0
     crop_box: tuple[float, float, float, float] | None = None
+    preserve_transparency: bool = False
+    alpha_threshold: int = 128
 
     def validate(self) -> None:
         if not 10 <= self.width <= 1000 or not 10 <= self.height <= 1000:
@@ -29,6 +31,8 @@ class ConversionSettings:
         for name in ("brightness", "contrast", "saturation"):
             if not -100 <= getattr(self, name) <= 100:
                 raise ValueError(f"{name.title()} must be between -100 and 100.")
+        if not 0 <= self.alpha_threshold <= 255:
+            raise ValueError("Alpha threshold must be between 0 and 255.")
 
     @property
     def total_cells(self) -> int:

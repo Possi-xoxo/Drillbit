@@ -1,12 +1,13 @@
 from PySide6.QtCore import QPoint, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPen
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 from PIL.ImageQt import ImageQt
 
 class PatternCanvas(QWidget):
     patternChanged=Signal()
-    selectedColorChanged=Signal(str)
+    selectedColorChanged=Signal(object)
     inspectorChanged=Signal(str)
+    toolChanged=Signal(str)
 
     def __init__(self,parent=None):
         super().__init__(parent);self.pattern=None;self.undo_stack=None;self.selected_code=None;self.tool="Pencil"
@@ -21,8 +22,8 @@ class PatternCanvas(QWidget):
         image=self.pattern.to_image(self.show_initial)
         if self.highlight and self.selected_code:
             pixels=[]
-            for code,rgb in zip(self.pattern.initial_ids if self.show_initial else self.pattern.cell_ids,image.getdata()):
-                pixels.append(rgb if code==self.selected_code else tuple(round(v*.2+205) for v in rgb))
+            for code,rgb in zip(self.pattern.initial_ids if self.show_initial else self.pattern.cell_ids,image.get_flattened_data()):
+                pixels.append(rgb if code==self.selected_code or code is None else tuple(round(v*.2+205) for v in rgb[:3])+(rgb[3],) if len(rgb)==4 else tuple(round(v*.2+205) for v in rgb))
             image.putdata(pixels)
         self._image=QImage(ImageQt(image)).copy();self.update()
 
@@ -30,6 +31,8 @@ class PatternCanvas(QWidget):
         painter=QPainter(self);painter.fillRect(self.rect(),QColor(45,45,48))
         if not self.pattern:return
         target=QRectF(self.offset.x(),self.offset.y(),self.pattern.width*self.cell_size,self.pattern.height*self.cell_size)
+        if self.pattern.supports_transparency:
+            tile=QPixmap(16,16);tile.fill(QColor(225,225,225));tile_painter=QPainter(tile);tile_painter.fillRect(8,0,8,8,QColor(180,180,180));tile_painter.fillRect(0,8,8,8,QColor(180,180,180));tile_painter.end();painter.drawTiledPixmap(target,tile)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform,False);painter.drawImage(target,self._image)
         if self.cell_size>=5:
             for x in range(self.pattern.width+1):
@@ -47,7 +50,11 @@ class PatternCanvas(QWidget):
         if event.button()!=Qt.MouseButton.LeftButton or self.show_initial:return
         cell=self._cell(event.position())
         if cell is None:return
-        if self.tool=="Eyedropper":self.selected_code=self.pattern.get(*cell);self.selectedColorChanged.emit(self.selected_code);self.refresh()
+        if self.tool=="Eyedropper":
+            picked=self.pattern.get(*cell)
+            if picked is None:self.tool="Eraser";self.toolChanged.emit("Eraser");self.inspectorChanged.emit(f"Cell: {cell[0]+1}, {cell[1]+1} | Transparent / Empty")
+            else:self.selected_code=picked;self.selectedColorChanged.emit(picked)
+            self.refresh()
         elif self.tool=="Flood Fill":
             changes=self.pattern.flood_fill(*cell,self.selected_code);self.undo_stack.push("Flood Fill",changes);self.refresh();self.patternChanged.emit()
         else:self._painting=True;self._stroke=[];self._last_cell=None;self._paint_cell(cell)
@@ -57,8 +64,10 @@ class PatternCanvas(QWidget):
             delta=event.position()-self._pan;self.offset+=QPoint(round(delta.x()),round(delta.y()));self._pan=event.position();self.update();return
         cell=self._cell(event.position())
         if cell:
-            code=self.pattern.get(*cell);color=self.pattern.palette.by_code[code]
-            self.inspectorChanged.emit(f"Cell: {cell[0]+1}, {cell[1]+1} | DMC {code} - {color.name} | {color.hex} | Used: {self.pattern.usage[code]:,}")
+            code=self.pattern.get(*cell)
+            if code is None:self.inspectorChanged.emit(f"Cell: {cell[0]+1}, {cell[1]+1} | Transparent / Empty")
+            else:
+                color=self.pattern.palette.by_code[code];self.inspectorChanged.emit(f"Cell: {cell[0]+1}, {cell[1]+1} | DMC {code} - {color.name} | {color.hex} | Used: {self.pattern.usage[code]:,}")
             if self._painting:self._paint_cell(cell)
 
     def _paint_cell(self,cell):
@@ -71,13 +80,13 @@ class PatternCanvas(QWidget):
                 twice=2*error
                 if twice>=dy:error+=dy;x0+=sx
                 if twice<=dx:error+=dx;y0+=sy
-        changes=self.pattern.paint(cells,self.selected_code);self._last_cell=cell
+        changes=self.pattern.paint(cells,None if self.tool=="Eraser" else self.selected_code);self._last_cell=cell
         if changes:self._stroke.extend(changes);self.refresh();self.patternChanged.emit()
 
     def mouseReleaseEvent(self,event):
         if event.button()==Qt.MouseButton.MiddleButton:self._pan=None
         if event.button()==Qt.MouseButton.LeftButton and self._painting:
-            self._painting=False;self.undo_stack.push("Pencil Stroke",self._stroke);self._stroke=[];self._last_cell=None
+            self._painting=False;self.undo_stack.push("Erase Stroke" if self.tool=="Eraser" else "Pencil Stroke",self._stroke);self._stroke=[];self._last_cell=None
 
     def wheelEvent(self,event):
         old=self.cell_size;self.cell_size=max(2,min(40,self.cell_size+(1 if event.angleDelta().y()>0 else -1)))

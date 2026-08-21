@@ -17,10 +17,7 @@ def load_image(path: str | Path) -> Image.Image:
             if source.width * source.height > MAX_SOURCE_PIXELS:
                 raise ImageLoadError("This image is too large (maximum 100 megapixels).")
             source.load()
-            rgba = ImageOps.exif_transpose(source).convert("RGBA")
-            background = Image.new("RGB", rgba.size, "white")
-            background.paste(rgba, mask=rgba.getchannel("A"))
-            return background
+            return ImageOps.exif_transpose(source).convert("RGBA")
     except ImageLoadError:
         raise
     except (OSError, UnidentifiedImageError, ValueError) as exc:
@@ -36,11 +33,11 @@ def aspect_width(height: int, source_width: int, source_height: int) -> int:
         raise ValueError("Source dimensions must be positive.")
     return max(10, min(1000, round(height * source_width / source_height)))
 
-def _fit(source: Image.Image, size: tuple[int, int], mode: FitMode) -> Image.Image:
+def _fit(source: Image.Image, size: tuple[int, int], mode: FitMode, fill=None) -> Image.Image:
     if mode == FitMode.FILL:
         return ImageOps.fit(source, size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
     contained = ImageOps.contain(source, size, method=Image.Resampling.LANCZOS)
-    canvas = Image.new("RGB", size, "white")
+    canvas = Image.new(source.mode, size, fill if fill is not None else (255, 255, 255, 255) if source.mode == "RGBA" else "white")
     canvas.paste(contained, ((size[0] - contained.width) // 2, (size[1] - contained.height) // 2))
     return canvas
 
@@ -66,13 +63,28 @@ def palette_statistics(image: Image.Image) -> list[PaletteEntry]:
     colors = image.convert("RGB").getcolors(maxcolors=image.width * image.height)
     return [] if colors is None else [PaletteEntry(rgb=rgb, count=count) for count, rgb in sorted(colors, reverse=True)]
 
-def convert_image(source: Image.Image, settings: ConversionSettings) -> tuple[Image.Image, list[PaletteEntry]]:
+def prepare_logical_image(source: Image.Image, settings: ConversionSettings) -> Image.Image:
+    """Crop, adjust, and resize source pixels to the one-cell-per-drill grid."""
     settings.validate()
-    image = source.convert("RGB").crop(normalized_crop_box(settings.crop_box, source.size))
+    rgba = source.convert("RGBA")
+    if settings.preserve_transparency:
+        image = rgba
+    else:
+        image = Image.new("RGBA", rgba.size, (255, 255, 255, 255)); image.alpha_composite(rgba)
+    image = image.crop(normalized_crop_box(settings.crop_box, source.size))
+    alpha = image.getchannel("A")
+    image = image.convert("RGB")
     image = ImageEnhance.Brightness(image).enhance(_factor(settings.brightness))
     image = ImageEnhance.Contrast(image).enhance(_factor(settings.contrast))
     image = ImageEnhance.Color(image).enhance(_factor(settings.saturation))
-    image = _fit(image, (settings.width, settings.height), settings.fit_mode)
+    rgb = _fit(image, (settings.width, settings.height), settings.fit_mode, "white")
+    if not settings.preserve_transparency:
+        return rgb
+    fitted_alpha = _fit(alpha, (settings.width, settings.height), settings.fit_mode, 0)
+    return Image.merge("RGBA", (*rgb.split(), fitted_alpha))
+
+def convert_image(source: Image.Image, settings: ConversionSettings) -> tuple[Image.Image, list[PaletteEntry]]:
+    image = prepare_logical_image(source, settings)
     dither = Image.Dither.NONE if settings.dither == DitherMode.OFF else Image.Dither.FLOYDSTEINBERG
     result = image.quantize(colors=settings.max_colors, method=Image.Quantize.MEDIANCUT, dither=dither).convert("RGB")
     return result, palette_statistics(result)

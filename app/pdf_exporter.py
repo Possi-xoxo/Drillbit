@@ -22,7 +22,7 @@ def export_pattern_pdf(logical, destination, drill_mm=2.5, orientation=Orientati
     canvas.showPage()
     total = layout.tile_count
     for number, (row, col, bounds) in enumerate(tile_ranges(logical.width, logical.height, layout), start=1):
-        _draw_tile(canvas, page_size, logical, drill_mm, margin_in, bounds, number, total, row, col)
+        _draw_tile(canvas, page_size, logical, drill_mm, margin_in, bounds, number, total, row, col, pattern)
         canvas.showPage()
     canvas.save()
     return path, layout
@@ -31,7 +31,9 @@ def _draw_legend(c, page_size, logical, palette, drill_mm, width_mm, height_mm, 
     page_w, page_h = page_size
     c.setFont("Helvetica-Bold", 20); c.drawString(0.6*inch, page_h-0.7*inch, "Diamond Art Pattern")
     c.setFont("Helvetica", 10)
-    lines = [f"Pattern: {logical.width} x {logical.height} drills ({logical.width*logical.height:,} total)",
+    drills=sum(1 for pixel in logical.get_flattened_data() if len(pixel)<4 or pixel[3]>0)
+    empty=logical.width*logical.height-drills
+    lines = [f"Pattern grid: {logical.width} x {logical.height} cells",f"Total drills: {drills:,}",f"Empty cells: {empty:,}",
              f"Drill size: {drill_mm:g} mm", f"Finished size: {width_mm:g} x {height_mm:g} mm",
              f"Finished size: {mm_to_inches(width_mm):.2f} x {mm_to_inches(height_mm):.2f} in",
              f"Colors used: {len(palette)}", f"Chart pages: {layout.tile_count} ({layout.rows} rows x {layout.columns} columns)",
@@ -52,14 +54,16 @@ def _draw_legend(c, page_size, logical, palette, drill_mm, width_mm, height_mm, 
         label=f"DMC {entry.code} - {entry.name} - {count:,} drills" if hasattr(entry,"code") else f"{entry.hex} - {count:,} drills"
         c.setFillColor(black); c.setFont("Helvetica", 8); c.drawString(x+18, y, label); y -= 0.19*inch
 
-def _draw_tile(c, page_size, logical, drill_mm, margin_in, bounds, number, total, row, col):
+def _draw_tile(c, page_size, logical, drill_mm, margin_in, bounds, number, total, row, col, pattern=None):
     page_w, page_h = page_size; x0, y0, x1, y1 = bounds; pitch = drill_mm*mm
     origin_x = margin_in*inch; origin_y = page_h-margin_in*inch-(y1-y0)*pitch
     pixels = logical.load(); c.setLineWidth(0.15)
     for gy in range(y0, y1):
         py = origin_y+(y1-gy-1)*pitch
         for gx in range(x0, x1):
-            rgb = pixels[gx, gy]; c.setFillColorRGB(*(v/255 for v in rgb)); c.rect(origin_x+(gx-x0)*pitch, py, pitch, pitch, fill=1, stroke=0)
+            rgb = pixels[gx, gy]
+            if (pattern is not None and pattern.get(gx,gy) is None) or (len(rgb)>=4 and rgb[3]==0):continue
+            c.setFillColorRGB(*(v/255 for v in rgb[:3])); c.rect(origin_x+(gx-x0)*pitch, py, pitch, pitch, fill=1, stroke=0)
     c.setStrokeColorRGB(0.35, 0.35, 0.35)
     for gx in range(x1-x0+1):
         x = origin_x+gx*pitch; c.line(x, origin_y, x, origin_y+(y1-y0)*pitch)

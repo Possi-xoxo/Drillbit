@@ -1,7 +1,7 @@
 import logging
 import sys
 from pathlib import Path
-from PIL import ImageDraw
+from PIL import Image, ImageDraw
 from PySide6.QtCore import QStandardPaths, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
@@ -107,6 +107,7 @@ class MainWindow(QMainWindow):
         self.dither = QComboBox(); self.dither.addItems([m.value for m in DitherMode])
         self.dither.setToolTip("Floyd-Steinberg mixes neighboring colors; Off keeps cleaner solid regions.")
         self.colors.setToolTip("Limits the final pattern to this many DMC reference colors.")
+        self.preserve_transparency=QCheckBox("Preserve Transparency");self.preserve_transparency.setToolTip("Keep transparent parts of the source image transparent instead of filling them with white.")
         self.brightness = SliderRow(); self.contrast = SliderRow(); self.saturation = SliderRow()
         self.reset_crop=QPushButton("Reset Crop"); self.reset_adjustments = QPushButton("Reset Adjustments"); self.show_grid = QCheckBox("Show Grid")
         self.pattern_label = QLabel(); self.total_label = QLabel(); self.color_label = QLabel("Colors Used: —")
@@ -114,7 +115,7 @@ class MainWindow(QMainWindow):
         self.palette_list = QListWidget(); self.palette_list.setMinimumHeight(200)
         rows = [("Active palette",QLabel("DMC Reference Palette")),("Size mode",self.size_mode),("Drill size",self.drill_size),("Width (diamonds)", self.width_box), ("Height (diamonds)", self.height_box), ("", self.lock_aspect),
             ("Finished width",self.physical_width),("Finished height",self.physical_height),("Units",self.physical_unit),("",self.reset_crop),
-            ("Image fit", self.fit_mode), ("Maximum colors", self.colors), ("Dithering", self.dither),
+            ("Image fit", self.fit_mode), ("Maximum colors", self.colors), ("Dithering", self.dither),("",self.preserve_transparency),
             ("Brightness", self.brightness), ("Contrast", self.contrast), ("Saturation", self.saturation),
             ("", self.reset_adjustments), ("", self.show_grid)]
         for label, widget in rows: form.addRow(label, widget)
@@ -137,6 +138,7 @@ class MainWindow(QMainWindow):
         self.physical_width.valueChanged.connect(lambda value: self._physical_input_changed(True, value))
         self.physical_height.valueChanged.connect(lambda value: self._physical_input_changed(False, value))
         for control in (self.fit_mode, self.colors, self.dither): control.currentIndexChanged.connect(self.schedule_preview)
+        self.preserve_transparency.toggled.connect(self.schedule_preview)
         for row in (self.brightness, self.contrast, self.saturation): row.slider.valueChanged.connect(self.schedule_preview)
         self.show_grid.toggled.connect(self._render_preview)
 
@@ -165,7 +167,8 @@ class MainWindow(QMainWindow):
     def _settings(self):
         return ConversionSettings(width=self.width_box.value(), height=self.height_box.value(), max_colors=int(self.colors.currentText()),
             fit_mode=FitMode(self.fit_mode.currentText()), dither=DitherMode(self.dither.currentText()), brightness=self.brightness.slider.value(),
-            contrast=self.contrast.slider.value(), saturation=self.saturation.slider.value(), crop_box=self.original_view.crop_box)
+            contrast=self.contrast.slider.value(), saturation=self.saturation.slider.value(), crop_box=self.original_view.crop_box,
+            preserve_transparency=self.preserve_transparency.isChecked())
 
     def schedule_preview(self, *_):
         self._update_stats()
@@ -178,13 +181,19 @@ class MainWindow(QMainWindow):
         if self.source is None: return
         try:
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor); self.pattern=convert_to_pattern(self.source,self._settings(),self.palette);self.logical=self.pattern.to_image()
-            self.editor.set_pattern(self.pattern);self._render_preview();self._show_palette(self.pattern.used_colors());self.export_button.setEnabled(True); self.print_button.setEnabled(True);self.dirty=True;self._update_title();self.statusBar().showMessage("DMC pattern updated")
+            self.editor.set_pattern(self.pattern);self._render_preview();self._show_palette(self.pattern.used_colors());self._update_stats();self.export_button.setEnabled(True); self.print_button.setEnabled(True);self.dirty=True;self._update_title();self.statusBar().showMessage("DMC pattern updated")
         except Exception as exc: LOG.exception("Conversion failed"); QMessageBox.critical(self, "Conversion Failed", str(exc))
         finally: QApplication.restoreOverrideCursor()
 
     def _render_preview(self, *_):
         if self.logical is None: return
         preview = self.logical.resize((self.logical.width * 8, self.logical.height * 8))
+        if preview.mode=="RGBA":
+            checker=Image.new("RGB",preview.size,(225,225,225));checker_draw=ImageDraw.Draw(checker)
+            for y in range(0,preview.height,16):
+                for x in range(0,preview.width,16):
+                    if (x//16+y//16)%2:checker_draw.rectangle((x,y,x+15,y+15),fill=(180,180,180))
+            checker.paste(preview,mask=preview.getchannel("A"));preview=checker
         if self.show_grid.isChecked():
             draw = ImageDraw.Draw(preview)
             for x in range(0, preview.width, 8): draw.line((x, 0, x, preview.height - 1), fill=(70, 70, 70))
@@ -198,11 +207,16 @@ class MainWindow(QMainWindow):
             pixmap = QPixmap(22, 22); pixmap.fill(QColor(*entry.rgb));label=f"DMC {entry.code} - {entry.name} - {count:,}" if hasattr(entry,"code") else f"{entry.hex} - {count:,}"
             item=QListWidgetItem(label)
             item.setIcon(QIcon(pixmap)); self.palette_list.addItem(item)
-        self.color_label.setText(f"Colors Used: {len(palette)}")
+        requested=self.pattern.metadata.get("requested_colors",self.colors.currentText()) if self.pattern else self.colors.currentText()
+        reason=self.pattern.metadata.get("utilization_reason","") if self.pattern else ""
+        text=f"Requested maximum: {requested}\nColors used: {len(palette)} of {requested}"
+        if reason:text+=f"\n{reason}"
+        self.color_label.setText(text)
 
     def _update_stats(self):
         w,h=self.width_box.value(),self.height_box.value(); drill=self.drill_size.value(); wmm,hmm=finished_size_mm(w,h,drill)
-        self.pattern_label.setText(f"Pattern: {w:,} × {h:,} drills"); self.total_label.setText(f"Total Diamonds: {w*h:,}")
+        drills=self.pattern.total_drills if self.pattern else w*h;empty=w*h-drills
+        self.pattern_label.setText(f"Pattern Grid: {w:,} × {h:,} cells"); self.total_label.setText(f"Total Drills: {drills:,}"+(f"\nEmpty Cells: {empty:,}" if empty else ""))
         self.finished_label.setText(f"Finished Size: {wmm:g} × {hmm:g} mm\n{mm_to_inches(wmm):.2f} × {mm_to_inches(hmm):.2f} in")
         self._syncing_physical=True; factor=25.4 if self.physical_unit.currentText()=="in" else 10.0
         self.physical_width.setValue(wmm/factor); self.physical_height.setValue(hmm/factor); self._syncing_physical=False
@@ -223,7 +237,7 @@ class MainWindow(QMainWindow):
     def reset_all(self):
         if self.manual_edits and QMessageBox.question(self,"Reset and Regenerate","Resetting will discard manual cell edits. Continue?")!=QMessageBox.StandardButton.Yes:return
         self.width_box.setValue(100); self.fit_mode.setCurrentText(FitMode.FILL.value); self.colors.setCurrentText("16")
-        self.dither.setCurrentText(DitherMode.OFF.value); self.show_grid.setChecked(False); self.lock_aspect.setChecked(True); self.drill_size.setValue(2.5); self.size_mode.setCurrentIndex(0); self._reset_adjustments(); self.original_view.reset_crop()
+        self.dither.setCurrentText(DitherMode.OFF.value);self.preserve_transparency.setChecked(False); self.show_grid.setChecked(False); self.lock_aspect.setChecked(True); self.drill_size.setValue(2.5); self.size_mode.setCurrentIndex(0); self._reset_adjustments(); self.original_view.reset_crop()
         if self.source is not None:self._set_height(aspect_height(100,*self.source.size));self.manual_edits=False;self.refresh_preview()
 
     def export_dialog(self):
@@ -276,13 +290,14 @@ class MainWindow(QMainWindow):
 
     def _editor_changed(self):
         if not self.pattern:return
-        self.logical=self.pattern.to_image();self.manual_edits=True;self.dirty=True;self._render_preview();self._show_palette(self.pattern.used_colors());self._update_title()
+        self.logical=self.pattern.to_image();self.manual_edits=True;self.dirty=True;self._render_preview();self._show_palette(self.pattern.used_colors());self._update_stats();self._update_title()
 
     def _project_settings(self):
         settings=self._settings()
         return {"width":settings.width,"height":settings.height,"max_colors":settings.max_colors,"fit_mode":settings.fit_mode.value,
                 "dither":settings.dither.value,"brightness":settings.brightness,"contrast":settings.contrast,"saturation":settings.saturation,
-                "crop_box":list(settings.crop_box) if settings.crop_box else None,"drill_mm":self.drill_size.value()}
+                "crop_box":list(settings.crop_box) if settings.crop_box else None,"drill_mm":self.drill_size.value(),
+                "preserve_transparency":settings.preserve_transparency,"alpha_threshold":settings.alpha_threshold}
 
     def save_current_project(self,save_as=False):
         if self.pattern is None:QMessageBox.information(self,"Nothing to Save","Open an image and create a pattern first.");return False
@@ -304,7 +319,7 @@ class MainWindow(QMainWindow):
             pattern,source,settings,editor_state=load_project(path,self.palette);self.pattern=pattern;self.source=source;self.project_path=Path(path);self.source_path=None;self.manual_edits=True
             self._apply_project_settings(settings)
             if source is not None:self.original_view.set_pil_image(source);self.original_view.set_crop_box(settings.get("crop_box"))
-            self.logical=pattern.to_image();self.editor.set_pattern(pattern);self.editor.select_code(editor_state.get("selected_code",next(iter(pattern.usage))))
+            self.logical=pattern.to_image();self.editor.set_pattern(pattern);self.editor.select_code(editor_state.get("selected_code",next(iter(pattern.usage),None)))
             self._render_preview();self._show_palette(pattern.used_colors());self.export_button.setEnabled(True);self.print_button.setEnabled(True);self.manual_edits=True;self.dirty=False;self._update_stats();self._update_title();self.tabs.setCurrentIndex(1)
         except Exception as exc:LOG.exception("Project open failed");QMessageBox.critical(self,"Open Project Failed",str(exc))
 
@@ -312,6 +327,7 @@ class MainWindow(QMainWindow):
         self._changing=True;self.width_box.setValue(data.get("width",100));self.height_box.setValue(data.get("height",100));self._changing=False
         self.colors.setCurrentText(str(data.get("max_colors",16)));self.fit_mode.setCurrentText(data.get("fit_mode",FitMode.FILL.value));self.dither.setCurrentText(data.get("dither",DitherMode.OFF.value))
         self.brightness.slider.setValue(data.get("brightness",0));self.contrast.slider.setValue(data.get("contrast",0));self.saturation.slider.setValue(data.get("saturation",0));self.drill_size.setValue(data.get("drill_mm",2.5))
+        self.preserve_transparency.setChecked(data.get("preserve_transparency",False))
 
     def _confirm_discard(self):
         if not self.dirty:return True

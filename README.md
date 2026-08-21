@@ -6,6 +6,14 @@ Version 0.2 adds physical drill sizing, finished dimensions in metric and imperi
 
 Version 0.3 makes the logical DMC-code grid authoritative and adds a searchable manual pattern editor. Automatic conversion is constrained to the built-in DMC Reference Palette. The editor supports zoom, middle-button pan, pencil strokes, eyedropper, four-direction flood fill, selected-color highlighting, global color replacement, undo/redo, used-color statistics, before/edited comparison, and self-contained `.diamond` project files.
 
+Version 0.3.1 makes edit history transactional and observable: completed pencil strokes, flood fills, and replacements synchronously update Undo/Redo state, while no-op edits create no history.
+
+Version 0.3.2 replaces the editor tool dropdown with an exclusive, clearly highlighted Pencil / Eyedropper / Flood Fill button group.
+
+Version 0.4 treats Maximum Colors as a meaningful target. Palette optimization now analyzes candidate regions at logical drill resolution, balances coverage, CIELAB distinctiveness, spatial coherence, local contrast, and four-connected confetti metrics, considers close alternative DMC matches to avoid duplicate collapse, and remains deterministic.
+
+Version 0.5 adds optional source-alpha preservation. Enable **Preserve Transparency** to convert low-coverage cells to empty/no-drill cells, exclude them from DMC selection and drill totals, edit them over a checkerboard with Pencil/Flood Fill/Eraser, preserve them in projects and PNG exports, and leave them empty in printable PDFs. The option defaults off, which composites source alpha onto pure white for backward-compatible conversion.
+
 ## Run from source
 
 Python 3.11–3.13 is recommended for packaging. A project-local portable Python 3.13 runtime is included for reproducible builds because Python 3.14 currently has a Qt/PyInstaller DLL packaging incompatibility.
@@ -53,7 +61,7 @@ The build script creates the environment, installs dependencies, tests, and invo
 
 Adjustments are applied before Lanczos reduction to the exact drill grid. Pillow median-cut quantization follows, with optional Floyd–Steinberg dithering. This preserves detail while guaranteeing dimensions and color limits. Fit uses white letterboxing; Fill uses a centered crop.
 
-Each intermediate quantized color is matched to the closest allowed DMC reference color in CIELAB using Euclidean Delta E 1976 distance. The final logical grid stores DMC codes, never arbitrary RGB values. The maximum-color limit therefore remains an upper bound after DMC mapping (duplicates can reduce the actual count).
+The logical drill grid is deterministically quantized into a broader candidate pool. Candidates are scored for drill coverage, CIELAB distinctiveness, spatial coherence, local contrast, and four-connected tiny-region/confetti burden. An iterative set optimizer selects distinct DMC colors, allowing a perceptually reasonable second-best DMC match when two useful candidates share the same nearest code. Every candidate region is then assigned through the selected DMC set. The final logical grid stores DMC codes, never arbitrary RGB values, and never exceeds the requested target.
 
 The 489-entry `DMC Reference Palette` was mechanically extracted from the open-source pyxstitch 1.11.1 floss table (`https://github.com/enckse/pyxstitch`, GPL-3.0). Its license is retained at `palettes/LICENSE-pyxstitch-GPL3.txt`. RGB values are screen-reference approximations, not official color-management data. Thread and resin drill appearance varies by display, lighting, material, dye lot, and manufacturer.
 
