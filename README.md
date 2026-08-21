@@ -14,6 +14,10 @@ Version 0.4 treats Maximum Colors as a meaningful target. Palette optimization n
 
 Version 0.5 adds optional source-alpha preservation. Enable **Preserve Transparency** to convert low-coverage cells to empty/no-drill cells, exclude them from DMC selection and drill totals, edit them over a checkerboard with Pencil/Flood Fill/Eraser, preserve them in projects and PNG exports, and leave them empty in printable PDFs. The option defaults off, which composites source alpha onto pure white for backward-compatible conversion.
 
+Version 0.6 makes initial palette construction fidelity-first. It analyzes a fixed 4-bit-per-channel histogram of up to 4,096 weighted source colors, unions multiple nearby DMC candidates for every source color, and grows the palette by the reduction in remaining CIELAB reconstruction error. Dominant cluster weights use a 0.72 power so large areas remain important without suppressing smaller color families. Confetti is measured after assignment and does not reject colors during palette construction.
+
+Version 0.7 adds local crash diagnostics. Drillbit writes INFO-level rotating logs to `%LOCALAPPDATA%\Drillbit\logs\drillbit.log` and native Python fault output to `drillbit_fault.log`. Use **Help > Diagnostics > Open Latest Log** or **Open Log Folder** to retrieve them, then provide the latest log when investigating a crash. Logs include environment details, conversion settings and timings, memory-shape estimates, significant actions, and exception tracebacks; they do not contain source-image pixels, telemetry, or uploads. Python exception hooks and `faulthandler` improve coverage, but a sufficiently abrupt operating-system or native-library failure can still terminate the process before diagnostics are flushed.
+
 ## Run from source
 
 Python 3.11–3.13 is recommended for packaging. A project-local portable Python 3.13 runtime is included for reproducible builds because Python 3.14 currently has a Qt/PyInstaller DLL packaging incompatibility.

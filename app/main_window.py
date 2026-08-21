@@ -2,8 +2,8 @@ import logging
 import sys
 from pathlib import Path
 from PIL import Image, ImageDraw
-from PySide6.QtCore import QStandardPaths, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtCore import QStandardPaths, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSlider, QSpinBox, QSplitter,
@@ -19,8 +19,22 @@ from .physical import Orientation, calculate_page_layout, drills_from_physical, 
 from .widgets.crop_view import CropView
 from .widgets.editor_panel import EditorPanel
 from .widgets.image_view import ImageView
+from .logging_manager import (begin_session,configure_logging,diagnostic_summary,end_session,get_log_directory,get_log_path,
+    install_exception_hooks,log_unhandled_exception,record_action,set_diagnostic_context)
 
 LOG = logging.getLogger(__name__)
+
+class SafeApplication(QApplication):
+    def notify(self,receiver,event):
+        try:return super().notify(receiver,event)
+        except Exception:
+            exc_type,exc_value,exc_traceback=sys.exc_info();log_unhandled_exception(exc_type,exc_value,exc_traceback);return False
+
+def _crash_dialog(report):
+    box=QMessageBox(QMessageBox.Icon.Critical,"Unexpected Error","Drillbit encountered an unexpected error.\n\nDetails were written to the application log.",parent=QApplication.activeWindow())
+    open_button=box.addButton("Open Log Folder",QMessageBox.ButtonRole.ActionRole);copy_button=box.addButton("Copy Error Details",QMessageBox.ButtonRole.ActionRole);box.addButton("Close",QMessageBox.ButtonRole.RejectRole);box.exec()
+    if box.clickedButton()==open_button:QDesktopServices.openUrl(QUrl.fromLocalFile(str(get_log_directory())))
+    elif box.clickedButton()==copy_button:QApplication.clipboard().setText(report)
 
 class SliderRow(QWidget):
     def __init__(self):
@@ -77,6 +91,9 @@ class MainWindow(QMainWindow):
         self._update_stats()
 
     def _build_ui(self):
+        diagnostics=self.menuBar().addMenu("Help").addMenu("Diagnostics")
+        self.open_log_folder_action=QAction("Open Log Folder",self);self.open_latest_log_action=QAction("Open Latest Log",self);self.copy_diagnostic_action=QAction("Copy Diagnostic Summary",self)
+        diagnostics.addActions((self.open_log_folder_action,self.open_latest_log_action,self.copy_diagnostic_action))
         root = QWidget(); outer = QVBoxLayout(root); toolbar = QHBoxLayout()
         self.open_button = QPushButton("Open Image…"); self.export_button = QPushButton("Export Image PNG…"); self.export_button.setEnabled(False)
         self.print_button = QPushButton("Print Pattern PDF…"); self.print_button.setEnabled(False)
@@ -127,6 +144,7 @@ class MainWindow(QMainWindow):
 
     def _connect(self):
         self.open_button.clicked.connect(self.open_image_dialog); self.export_button.clicked.connect(self.export_dialog)
+        self.open_log_folder_action.triggered.connect(self._open_log_folder);self.open_latest_log_action.triggered.connect(self._open_latest_log);self.copy_diagnostic_action.triggered.connect(self._copy_diagnostic_summary)
         self.print_button.clicked.connect(self.print_pdf_dialog)
         self.open_project_button.clicked.connect(self.open_project_dialog);self.save_project_button.clicked.connect(self.save_current_project);self.save_project_as_button.clicked.connect(lambda:self.save_current_project(True))
         self.regenerate_button.clicked.connect(self.regenerate_pattern);self.editor.changed.connect(self._editor_changed)
@@ -155,10 +173,12 @@ class MainWindow(QMainWindow):
 
     def load_path(self, path):
         try:
+            record_action("Opening image")
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor); self.source = load_image(path); self.source_path = Path(path)
             self.project_path=None;self.pattern=None;self.manual_edits=False
             self.original_view.set_pil_image(self.source)
             if self.lock_aspect.isChecked(): self._set_height(aspect_height(self.width_box.value(), *self.source.size))
+            LOG.info("Image loaded width=%s height=%s mode=%s",self.source.width,self.source.height,self.source.mode);record_action("Image loaded")
             self.statusBar().showMessage(f"Loaded {self.source_path.name} — {self.source.width} × {self.source.height} px"); self.refresh_preview()
         except ImageLoadError as exc: QMessageBox.warning(self, "Could Not Open Image", str(exc))
         except Exception: LOG.exception("Image load failed"); QMessageBox.critical(self, "Could Not Open Image", "An unexpected error occurred.")
@@ -180,6 +200,7 @@ class MainWindow(QMainWindow):
     def refresh_preview(self):
         if self.source is None: return
         try:
+            settings=self._settings();record_action("Conversion requested");set_diagnostic_context(pattern=f"{settings.width} x {settings.height}",max_colors=settings.max_colors,transparency=settings.preserve_transparency)
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor); self.pattern=convert_to_pattern(self.source,self._settings(),self.palette);self.logical=self.pattern.to_image()
             self.editor.set_pattern(self.pattern);self._render_preview();self._show_palette(self.pattern.used_colors());self._update_stats();self.export_button.setEnabled(True); self.print_button.setEnabled(True);self.dirty=True;self._update_title();self.statusBar().showMessage("DMC pattern updated")
         except Exception as exc: LOG.exception("Conversion failed"); QMessageBox.critical(self, "Conversion Failed", str(exc))
@@ -248,7 +269,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Export PNG", name, "PNG Image (*.png)")
         if not path: return
         try:
-            size, grid = options.values(); saved = export_png(self.pattern, path, size, grid); self.statusBar().showMessage(f"Exported {saved}")
+            size, grid = options.values();record_action("PNG export started");LOG.info("PNG export started cell_size=%s grid=%s",size,grid);saved = export_png(self.pattern, path, size, grid);LOG.info("PNG export completed");record_action("PNG export completed");self.statusBar().showMessage(f"Exported {saved}")
             QMessageBox.information(self, "Export Complete", f"Saved to:\n{saved}")
         except OSError: LOG.exception("Export failed"); QMessageBox.critical(self, "Export Failed", "The file could not be written.")
 
@@ -279,14 +300,14 @@ class MainWindow(QMainWindow):
         path,_=QFileDialog.getSaveFileName(self,"Save Printable Pattern",name,"PDF Document (*.pdf)")
         if not path: return
         try:
-            orientation,margin,overlap=dialog.values(); saved,layout=export_pattern_pdf(self.pattern,path,self.drill_size.value(),orientation,margin,overlap)
+            orientation,margin,overlap=dialog.values();record_action("PDF export started");LOG.info("PDF export started orientation=%s",orientation.value);saved,layout=export_pattern_pdf(self.pattern,path,self.drill_size.value(),orientation,margin,overlap);LOG.info("PDF export completed pages=%s",layout.tile_count);record_action("PDF export completed")
             QMessageBox.information(self,"PDF Complete",f"Printable pattern saved to:\n{saved}\n\nChart pages: {layout.tile_count}\nPrint at 100% / Actual Size.")
         except Exception as exc: LOG.exception("PDF export failed"); QMessageBox.critical(self,"PDF Export Failed",f"The printable pattern could not be created.\n\n{exc}")
 
     def regenerate_pattern(self):
         if self.source is None:return
         if self.manual_edits and QMessageBox.question(self,"Regenerate Pattern","This will regenerate the pattern and discard manual cell edits. Continue?")!=QMessageBox.StandardButton.Yes:return
-        self.manual_edits=False;self.refresh_preview()
+        record_action("Manual regeneration initiated");LOG.info("Pattern regeneration initiated");self.manual_edits=False;self.refresh_preview()
 
     def _editor_changed(self):
         if not self.pattern:return
@@ -307,7 +328,7 @@ class MainWindow(QMainWindow):
             path,_=QFileDialog.getSaveFileName(self,"Save Diamond Art Project",name,"Diamond Art Project (*.diamond)")
             if not path:return False
         try:
-            self.project_path=save_project(path,self.pattern,self.source,self._project_settings(),{"selected_code":self.editor.canvas.selected_code})
+            self.project_path=save_project(path,self.pattern,self.source,self._project_settings(),{"selected_code":self.editor.canvas.selected_code});LOG.info("Project saved");record_action("Project saved")
             self.dirty=False;self._update_title();self.statusBar().showMessage(f"Saved {self.project_path.name}");return True
         except Exception as exc:LOG.exception("Project save failed");QMessageBox.critical(self,"Save Failed",str(exc));return False
 
@@ -316,11 +337,13 @@ class MainWindow(QMainWindow):
         path,_=QFileDialog.getOpenFileName(self,"Open Diamond Art Project","","Diamond Art Project (*.diamond)")
         if not path:return
         try:
+            record_action("Opening project")
             pattern,source,settings,editor_state=load_project(path,self.palette);self.pattern=pattern;self.source=source;self.project_path=Path(path);self.source_path=None;self.manual_edits=True
             self._apply_project_settings(settings)
             if source is not None:self.original_view.set_pil_image(source);self.original_view.set_crop_box(settings.get("crop_box"))
             self.logical=pattern.to_image();self.editor.set_pattern(pattern);self.editor.select_code(editor_state.get("selected_code",next(iter(pattern.usage),None)))
             self._render_preview();self._show_palette(pattern.used_colors());self.export_button.setEnabled(True);self.print_button.setEnabled(True);self.manual_edits=True;self.dirty=False;self._update_stats();self._update_title();self.tabs.setCurrentIndex(1)
+            LOG.info("Project opened pattern=%sx%s colors=%s",pattern.width,pattern.height,len(pattern.usage));record_action("Project opened")
         except Exception as exc:LOG.exception("Project open failed");QMessageBox.critical(self,"Open Project Failed",str(exc))
 
     def _apply_project_settings(self,data):
@@ -340,10 +363,23 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"Diamond Art Converter - {name}{' *' if self.dirty else ''}")
 
     def closeEvent(self,event):
-        event.accept() if self._confirm_discard() else event.ignore()
+        if self._confirm_discard():LOG.info("Project close accepted");record_action("Application close accepted");event.accept()
+        else:event.ignore()
+
+    def _open_log_folder(self):
+        get_log_directory().mkdir(parents=True,exist_ok=True)
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(get_log_directory()))):QMessageBox.warning(self,"Diagnostics","The log folder could not be opened.")
+    def _open_latest_log(self):
+        if not get_log_path().exists() or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(get_log_path()))):QMessageBox.warning(self,"Diagnostics","The latest log could not be opened.")
+    def _copy_diagnostic_summary(self):
+        current={"Pattern":f"{self.pattern.width} x {self.pattern.height}" if self.pattern else "None","Maximum colors":self.colors.currentText(),"Colors used":len(self.pattern.usage) if self.pattern else 0,"Transparency":self.preserve_transparency.isChecked()}
+        QApplication.clipboard().setText(diagnostic_summary(**current));self.statusBar().showMessage("Diagnostic summary copied")
 
 def run():
-    app = QApplication(sys.argv); app.setApplicationName("Diamond Art Converter"); app.setOrganizationName("Personal")
-    log_dir = Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation)); log_dir.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(filename=log_dir / "diamond_art_converter.log", level=logging.INFO)
-    window = MainWindow(); window.show(); return app.exec()
+    configure_logging();install_exception_hooks();previous_abnormal=begin_session();app=SafeApplication(sys.argv);app.setApplicationName("Drillbit");app.setOrganizationName("Drillbit");install_exception_hooks(_crash_dialog);app.aboutToQuit.connect(end_session)
+    window=MainWindow();window.show()
+    if previous_abnormal:
+        def offer_logs():
+            if QMessageBox.question(window,"Previous Session","Drillbit did not close normally last time. Open diagnostic logs?")==QMessageBox.StandardButton.Yes:window._open_log_folder()
+        QTimer.singleShot(0,offer_logs)
+    return app.exec()
