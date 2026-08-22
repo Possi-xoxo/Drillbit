@@ -86,3 +86,33 @@ def test_undo_and_redo_each_invalidate_fresh_results():
     app.processEvents()
     assert panel.confetti_analysis.stale
     panel.close()
+
+
+def test_navigation_geometry_is_stable_for_variable_details_filters_and_resize():
+    app=QApplication.instance() or QApplication([])
+    palette=ReferencePalette("Variable",[
+        PaletteColor("A","Base",(90,90,90)),
+        PaletteColor("B","Short",(105,105,105)),
+        PaletteColor("C","A deliberately very long DMC color name used to verify wrapped selected-region details",(125,125,125)),
+        PaletteColor("D","Another unusually long replacement color name that requires multiple wrapped lines",(145,145,145)),
+    ])
+    cells=["A"]*81
+    for index,code in ((10,"B"),(16,"C"),(46,"D")):cells[index]=code
+    panel=EditorPanel();panel.set_pattern(PatternModel(9,9,cells,palette));panel.resize(1150,900);panel.show();panel.inspect_confetti.setChecked(True);panel.confetti_filter.setCurrentText("All suspects");app.processEvents()
+    assert panel.confetti_list.count()>=3
+    navigation_geometry=panel.confetti_navigation.geometry();previous_geometry=panel.confetti_previous.geometry();next_geometry=panel.confetti_next.geometry()
+    for row in range(panel.confetti_list.count()):
+        panel.confetti_list.setCurrentRow(row);app.processEvents()
+        assert panel.confetti_navigation.geometry()==navigation_geometry
+        assert panel.confetti_previous.geometry()==previous_geometry
+        assert panel.confetti_next.geometry()==next_geometry
+    for confidence_filter in ("High only","High + Medium","All suspects"):
+        panel.confetti_filter.setCurrentText(confidence_filter);app.processEvents();assert panel.confetti_navigation.geometry()==navigation_geometry
+    panel.confetti_details.setText("\n".join(["Long wrapped detail content"]*30));app.processEvents()
+    assert panel.confetti_navigation.geometry()==navigation_geometry
+    assert panel.confetti_details_scroll.verticalScrollBar().maximum()>0
+    for width in (980,1350):
+        panel.resize(width,820);app.processEvents();left=panel.confetti_previous.geometry();right=panel.confetti_next.geometry()
+        assert left.height()==right.height()==previous_geometry.height()
+        assert abs(left.width()-right.width())<=1 and left.y()==right.y()
+    panel.close()

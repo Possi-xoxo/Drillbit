@@ -14,23 +14,31 @@ class PatternCanvas(QWidget):
 
     def __init__(self,parent=None):
         super().__init__(parent);self.pattern=None;self.undo_stack=None;self.selected_code=None;self.tool="Pencil"
-        self.cell_size=10;self.offset=QPoint(20,20);self.highlight=False;self.show_initial=False;self._image=QImage();self._source_reference=QImage();self.show_source_overlay=False;self.source_overlay_opacity=.4;self._stroke=[];self._painting=False;self._pan=None;self._last_cell=None
+        self.cell_size=10;self.offset=QPoint(20,20);self.highlight=False;self.show_initial=False;self._image=QImage();self._source_reference=QImage();self.show_source_overlay=False;self.source_overlay_opacity=.4;self.replacement_preview=None;self._stroke=[];self._painting=False;self._pan=None;self._last_cell=None
         self.confetti_analysis=None;self.confetti_confidences={"High"};self.confetti_cells={};self.selected_confetti_id=None;self.show_confetti=False;self.inspection_mode=False
         self.selection=None;self._selection_anchor=None;self._selection_press=None;self._selection_had_existing=False;self._selection_before_drag=None;self._move_origin=None;self._move_grab=None;self._move_preview=None;self.allow_selection_move=False;self.last_mouse_cell=None
         self.setMouseTracking(True);self.setFocusPolicy(Qt.FocusPolicy.StrongFocus);self.setMinimumSize(400,350)
 
     def set_pattern(self,pattern,undo_stack):
-        self.pattern=pattern;self.undo_stack=undo_stack;self.selected_code=next(iter(pattern.usage),None);self.offset=QPoint(20,20);self.clear_selection();self.refresh()
+        self.pattern=pattern;self.undo_stack=undo_stack;self.selected_code=next(iter(pattern.usage),None);self.replacement_preview=None;self.offset=QPoint(20,20);self.clear_selection();self.refresh()
 
     def refresh(self):
         if not self.pattern:return
         image=self.pattern.to_image(self.show_initial)
+        if self.replacement_preview and not self.show_initial:
+            source,destination=self.replacement_preview;replacement=self.pattern.palette.by_code[destination].rgb;pixels=[]
+            for code,rgb in zip(self.pattern.cell_ids,image.get_flattened_data()):
+                pixels.append((*replacement,rgb[3]) if code==source and len(rgb)==4 else replacement if code==source else rgb)
+            image.putdata(pixels)
         if self.highlight and self.selected_code:
             pixels=[]
             for code,rgb in zip(self.pattern.initial_ids if self.show_initial else self.pattern.cell_ids,image.get_flattened_data()):
                 pixels.append(rgb if code==self.selected_code or code is None else tuple(round(v*.2+205) for v in rgb[:3])+(rgb[3],) if len(rgb)==4 else tuple(round(v*.2+205) for v in rgb))
             image.putdata(pixels)
         self._image=QImage(ImageQt(image)).copy();self.update()
+
+    def set_replacement_preview(self,source=None,destination=None):
+        self.replacement_preview=(source,destination) if source and destination and source!=destination else None;self.refresh()
 
     def set_source_reference(self,image):
         self._source_reference=QImage(ImageQt(image)).copy() if image is not None else QImage();self.show_source_overlay=False;self.update()

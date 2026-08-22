@@ -38,6 +38,10 @@ Version 1.4 separates logical cells, physical **Drill Pitch**, and visual **Dril
 
 Version 1.4.1 extends Drill Shape to printable pattern PDFs. Square charts retain the existing colored square cells, centered symbols, and global 10-cell guides. Round charts use the same orthogonal logical grid and 92% diameter-to-pitch ratio, rendering anti-aliased colored circles on printable white while keeping symbols centered inside each drill and preserving the square grid, registration, overlap, calibration, page layout, physical size, drill counts, and rasterized one-image-per-chart-page architecture.
 
+Version 1.4.2 stabilizes the Confetti Inspector navigation layout. Summary, suspect-list, navigation, and selected-region details now occupy dedicated bounded slots; long wrapped details remain fully available through an internal scrollbar, while equal-sized Previous and Next buttons stay fixed during selection, filtering, and sidebar resizing.
+
+Version 1.5 replaces the ambiguous global color-replacement button with a contextual workflow beneath Used Colors. Selecting a used color now identifies the global source and affected drill count, offers LAB/Delta E-ordered substitutes, supports replacement-specific search and owned-color filtering, and shows the closest owned alternative. An optional canvas-only preview substitutes the destination appearance without touching logical cells, usage, history, confetti analysis, or project state. Apply still records one exact global delta command, immediately refreshes statistics, selects the destination color, and remains fully undoable; Cancel simply removes the preview.
+
 The inventory is global rather than part of a `.diamond` project and is stored at `%LOCALAPPDATA%\Drillbit\owned_colors.json`, so it survives executable rebuilds and application updates. To reset it outside Drillbit, close the application and delete that file. The next launch starts with an empty inventory. If the file is corrupt, Drillbit preserves it, logs the parse failure, and safely starts with an empty inventory.
 
 ## Run from source

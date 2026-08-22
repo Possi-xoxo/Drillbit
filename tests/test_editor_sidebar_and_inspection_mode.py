@@ -31,7 +31,7 @@ def test_sidebar_prioritizes_used_colors_and_keeps_one_active_color():
     _app, panel = make_panel();layout = panel.side_layout
     assert layout.indexOf(panel.used_heading) < layout.indexOf(panel.palette_heading)
     assert layout.stretch(layout.indexOf(panel.used_list)) > layout.stretch(layout.indexOf(panel.palette_list))
-    assert layout.indexOf(panel.replace) == layout.indexOf(panel.used_list) + 1
+    assert layout.indexOf(panel.replacement_group) == layout.indexOf(panel.used_list) + 1
     panel._select_item(item_for(panel.used_list, "B"));assert panel.canvas.selected_code == "B" and "DMC B - Near Gray" in panel.selected.text()
     panel._select_item(item_for(panel.palette_list, "C"));assert panel.canvas.selected_code == "C" and "DMC C - White" in panel.selected.text()
     assert panel.palette_list.currentItem().data(Qt.ItemDataRole.UserRole) == "C"
