@@ -4,10 +4,12 @@ import zipfile
 from pathlib import Path
 from PIL import Image
 from .pattern_model import PatternModel
+from .symbols import ensure_pattern_symbols
 
 PROJECT_VERSION=2
 
 def save_project(path,pattern,source=None,settings=None,editor_state=None):
+    ensure_pattern_symbols(pattern)
     destination=Path(path)
     if destination.suffix.lower()!=".diamond":destination=destination.with_suffix(".diamond")
     payload={"format":"Diamond Art Converter Project","version":PROJECT_VERSION,"palette":pattern.palette.name,

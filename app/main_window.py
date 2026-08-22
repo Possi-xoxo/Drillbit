@@ -64,11 +64,12 @@ class PrintDialog(QDialog):
         self.orientation = QComboBox(); self.orientation.addItems([item.value for item in Orientation])
         self.margin = QDoubleSpinBox(); self.margin.setRange(0.1, 1.0); self.margin.setSingleStep(0.05); self.margin.setValue(0.25); self.margin.setSuffix(" in")
         self.overlap = QDoubleSpinBox(); self.overlap.setRange(0, 1.0); self.overlap.setSingleStep(0.05); self.overlap.setValue(0.25); self.overlap.setSuffix(" in")
+        self.include_symbols=QCheckBox("Include Symbols");self.include_symbols.setChecked(True);self.include_legend=QCheckBox("Include Legend");self.include_legend.setChecked(True)
         self.summary = QLabel(); self.summary.setWordWrap(True)
         for control in (self.orientation, self.margin, self.overlap):
             signal = control.currentIndexChanged if isinstance(control, QComboBox) else control.valueChanged; signal.connect(lambda *_: self._refresh(width, height, drill_mm))
         form.addRow("Paper", QLabel("US Letter - 8.5 x 11 inches")); form.addRow("Orientation", self.orientation)
-        form.addRow("Margins", self.margin); form.addRow("Page overlap", self.overlap); form.addRow(self.summary)
+        form.addRow("Margins", self.margin); form.addRow("Page overlap", self.overlap);form.addRow("",self.include_symbols);form.addRow("",self.include_legend); form.addRow(self.summary)
         buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Save|QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept); buttons.rejected.connect(self.reject); form.addRow(buttons); self._refresh(width,height,drill_mm)
 
@@ -79,7 +80,7 @@ class PrintDialog(QDialog):
                              f"Chart Pages Required: {layout.tile_count}\nOrientation: {layout.orientation.value}\n\n"
                              "Print at 100% / Actual Size.")
 
-    def values(self): return Orientation(self.orientation.currentText()), self.margin.value(), self.overlap.value()
+    def values(self): return Orientation(self.orientation.currentText()), self.margin.value(), self.overlap.value(),self.include_symbols.isChecked(),self.include_legend.isChecked()
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -300,7 +301,7 @@ class MainWindow(QMainWindow):
         path,_=QFileDialog.getSaveFileName(self,"Save Printable Pattern",name,"PDF Document (*.pdf)")
         if not path: return
         try:
-            orientation,margin,overlap=dialog.values();record_action("PDF export started");LOG.info("PDF export started orientation=%s",orientation.value);saved,layout=export_pattern_pdf(self.pattern,path,self.drill_size.value(),orientation,margin,overlap);LOG.info("PDF export completed pages=%s",layout.tile_count);record_action("PDF export completed")
+            orientation,margin,overlap,include_symbols,include_legend=dialog.values();record_action("PDF export started");LOG.info("PDF export started orientation=%s symbols=%s legend=%s",orientation.value,include_symbols,include_legend);saved,layout=export_pattern_pdf(self.pattern,path,self.drill_size.value(),orientation,margin,overlap,include_symbols,include_legend);LOG.info("PDF export completed pages=%s",layout.tile_count);record_action("PDF export completed")
             QMessageBox.information(self,"PDF Complete",f"Printable pattern saved to:\n{saved}\n\nChart pages: {layout.tile_count}\nPrint at 100% / Actual Size.")
         except Exception as exc: LOG.exception("PDF export failed"); QMessageBox.critical(self,"PDF Export Failed",f"The printable pattern could not be created.\n\n{exc}")
 

@@ -1,5 +1,4 @@
 import math
-import re
 from PIL import Image
 from pypdf import PdfReader
 from app.pdf_exporter import export_pattern_pdf
@@ -14,10 +13,10 @@ def test_pdf_is_true_letter_and_cell_pitch_is_physical(tmp_path):
     assert len(reader.pages)==2  # legend plus one chart page
     width=float(reader.pages[1].mediabox.width); height=float(reader.pages[1].mediabox.height)
     assert math.isclose(width,612,abs_tol=0.01) and math.isclose(height,792,abs_tol=0.01)
-    expected_pitch=2.5*72/25.4
+    expected_width=10*2.5*72/25.4
     content=reader.pages[1].get_contents().get_data().decode("latin-1")
-    rectangle_widths=[float(match.group(1)) for match in re.finditer(r"\s[-.\d]+\s[-.\d]+\s([-\d.]+)\s[-\d.]+\sre",content)]
-    assert any(math.isclose(value,expected_pitch,abs_tol=0.001) for value in rectangle_widths)
+    assert len(reader.pages[1].images)==1
+    assert f"{expected_width:.5f}"[:7] in content
     assert layout.tile_count==1
 
 def test_pdf_legend_uses_dmc_codes_and_names(tmp_path):

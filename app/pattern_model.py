@@ -1,6 +1,7 @@
 from collections import Counter, deque
 from dataclasses import dataclass
 from PIL import Image
+from .symbols import ensure_pattern_symbols
 
 @dataclass(frozen=True)
 class CellChange:
@@ -14,7 +15,7 @@ class PatternModel:
         invalid={code for code in cell_ids if code is not None}-set(palette.by_code)
         if invalid: raise ValueError(f"Unknown palette IDs: {sorted(invalid)[:5]}")
         self.width=width; self.height=height; self.cell_ids=list(cell_ids); self.palette=palette; self.metadata=metadata or {}
-        self.initial_ids=list(initial_ids if initial_ids is not None else cell_ids); self.usage=Counter(code for code in self.cell_ids if code is not None)
+        self.initial_ids=list(initial_ids if initial_ids is not None else cell_ids); self.usage=Counter(code for code in self.cell_ids if code is not None);ensure_pattern_symbols(self)
 
     def index(self,x,y):
         if not (0<=x<self.width and 0<=y<self.height): raise IndexError((x,y))

@@ -18,6 +18,10 @@ Version 0.6 makes initial palette construction fidelity-first. It analyzes a fix
 
 Version 0.7 adds local crash diagnostics. Drillbit writes INFO-level rotating logs to `%LOCALAPPDATA%\Drillbit\logs\drillbit.log` and native Python fault output to `drillbit_fault.log`. Use **Help > Diagnostics > Open Latest Log** or **Open Log Folder** to retrieve them, then provide the latest log when investigating a crash. Logs include environment details, conversion settings and timings, memory-shape estimates, significant actions, and exception tracebacks; they do not contain source-image pixels, telemetry, or uploads. Python exception hooks and `faulthandler` improve coverage, but a sufficiently abrupt operating-system or native-library failure can still terminate the process before diagnostics are flushed.
 
+Version 0.8 adds printable PDF symbols and dedicated legends without changing the on-screen editor. Every currently used DMC color receives a deterministic project-persisted ASCII symbol. Printable chart cells combine color and a high-contrast symbol, while transparent cells remain empty. PDF options allow symbols and legends to be disabled independently, and large legends automatically continue across pages.
+
+Version 0.8.1 makes symbolized PDFs responsive in common viewers. Each chart tile is rendered once as a lossless 600-DPI image and embedded at the exact physical size dictated by the drill pitch. The searchable legend, calibration squares, footer, and registration marks remain vector PDF content. Export logging records per-tile raster, symbol, encoding, embedding, and final-save timings without logging individual cells.
+
 ## Run from source
 
 Python 3.11–3.13 is recommended for packaging. A project-local portable Python 3.13 runtime is included for reproducible builds because Python 3.14 currently has a Qt/PyInstaller DLL packaging incompatibility.
@@ -74,7 +78,7 @@ The 489-entry `DMC Reference Palette` was mechanically extracted from the open-s
 - Extreme 1000 × 1000 patterns and enlarged exports may be slower or memory-heavy.
 - Conversion is debounced but currently runs in the GUI process.
 - Exported grid lines replace one edge pixel of enlarged cells.
-- Printable charts use DMC colors and labels but do not yet assign per-cell symbols.
+- Printable PDF export runs synchronously and can briefly make the window appear busy on unusually large patterns.
 - DMC RGB matching uses Delta E 1976 rather than newer Delta E 2000.
 - Project files do not yet preserve undo history; reopening starts a fresh undo stack.
 - Automatic confetti cleanup is not implemented; the internal connected-region analysis reports small regions without changing them.
