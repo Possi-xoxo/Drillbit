@@ -1,17 +1,20 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QApplication,QButtonGroup,QCheckBox,QComboBox,QGroupBox,QHBoxLayout,QLabel,QLineEdit,QListWidget,QListWidgetItem,
+from PySide6.QtWidgets import (QApplication,QButtonGroup,QCheckBox,QComboBox,QDialog,QDialogButtonBox,QGroupBox,QHBoxLayout,QLabel,QLineEdit,QListWidget,QListWidgetItem,
     QMessageBox,QPushButton,QSizePolicy,QSplitter,QToolButton,QVBoxLayout,QWidget)
+import logging
 from .pattern_editor import PatternCanvas
 from ..pattern_analysis import analyze_confetti,region_summary
 from ..pattern_model import UndoStack
 
+LOG=logging.getLogger(__name__)
+
 class EditorPanel(QWidget):
     changed=Signal()
     def __init__(self,parent=None):
-        super().__init__(parent);self.pattern=None;self.owned_codes=set();self.confetti_analysis=None;self._confetti_selected_id=None;self.undo_stack=UndoStack();layout=QVBoxLayout(self);tools=QHBoxLayout()
+        super().__init__(parent);self.pattern=None;self.pattern_clipboard=None;self.owned_codes=set();self.confetti_analysis=None;self._confetti_selected_id=None;self.undo_stack=UndoStack();layout=QVBoxLayout(self);tools=QHBoxLayout()
         self.tool_group=QButtonGroup(self);self.tool_group.setExclusive(True);self.tool_buttons={}
-        for name,tooltip in (("Pencil","Paint individual diamond cells"),("Eyedropper","Pick a color from the pattern"),("Flood Fill","Fill a connected area with the selected color"),("Eraser","Clear cells to transparent / no drill")):
+        for name,tooltip in (("Pencil","Paint individual diamond cells"),("Eyedropper","Pick a color from the pattern"),("Flood Fill","Fill a connected area with the selected color"),("Eraser","Clear cells to transparent / no drill"),("Select","Select and move a rectangular region of logical cells")):
             button=QToolButton();button.setText(name);button.setCheckable(True);button.setToolTip(tooltip);button.setAutoRaise(False)
             button.setStyleSheet("QToolButton { padding: 5px 10px; } QToolButton:checked { background-color: palette(highlight); color: palette(highlighted-text); font-weight: 600; }")
             self.tool_group.addButton(button);self.tool_buttons[name]=button
@@ -33,6 +36,7 @@ class EditorPanel(QWidget):
         self.used_heading=QLabel("Used Colors");self.palette_heading=QLabel("DMC Palette");self.analysis=QLabel()
         side_layout.addWidget(self.selected);side_layout.addWidget(self.inspector);side_layout.addWidget(self.used_heading);side_layout.addWidget(self.used_list,3);side_layout.addWidget(self.replace)
         side_layout.addWidget(self.palette_heading);side_layout.addWidget(self.search);side_layout.addWidget(self.palette_list,1);side_layout.addWidget(self.analysis)
+        self._build_selection_controls(side_layout)
         self._build_confetti_inspector(side_layout)
         split.addWidget(side);split.setStretchFactor(0,1);layout.addWidget(split,1)
         self.tool_group.buttonClicked.connect(self._tool_selected);self.search.textChanged.connect(self._populate_palette)
@@ -41,7 +45,19 @@ class EditorPanel(QWidget):
         self.replace.clicked.connect(self._replace);self.canvas.patternChanged.connect(self._pattern_changed);self.canvas.selectedColorChanged.connect(self.select_code);self.canvas.inspectorChanged.connect(self.inspector.setText)
         self.canvas.toolChanged.connect(self.select_tool)
         self.canvas.confettiRegionClicked.connect(self._select_confetti_id)
+        self.canvas.selectionChanged.connect(self._selection_changed);self.canvas.moveSelectionRequested.connect(self._move_selection)
         self.confetti_escape=QShortcut(QKeySequence(Qt.Key.Key_Escape),self);self.confetti_escape.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut);self.confetti_escape.activated.connect(self._escape_confetti)
+        self.select_all_shortcut=QShortcut(QKeySequence.StandardKey.SelectAll,self.canvas);self.select_all_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut);self.select_all_shortcut.activated.connect(self.canvas.select_all)
+        self.copy_shortcut=QShortcut(QKeySequence.StandardKey.Copy,self.canvas);self.copy_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut);self.copy_shortcut.activated.connect(self._copy_selection)
+        self.paste_shortcut=QShortcut(QKeySequence.StandardKey.Paste,self.canvas);self.paste_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut);self.paste_shortcut.activated.connect(self._paste_selection)
+        self.delete_shortcut=QShortcut(QKeySequence(Qt.Key.Key_Delete),self.canvas);self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut);self.delete_shortcut.activated.connect(self._clear_selection_cells)
+
+    def _build_selection_controls(self,side_layout):
+        self.selection_group=QGroupBox("Selection");box=QVBoxLayout(self.selection_group);self.selection_status=QLabel();self.selection_status.setWordWrap(True);box.addWidget(self.selection_status)
+        first=QHBoxLayout();self.fill_selection=QPushButton("Fill");self.clear_selection_cells=QPushButton("Clear Cells");self.copy_selection=QPushButton("Copy");first.addWidget(self.fill_selection);first.addWidget(self.clear_selection_cells);first.addWidget(self.copy_selection);box.addLayout(first)
+        second=QHBoxLayout();self.paste_selection=QPushButton("Paste");self.replace_selection=QPushButton("Replace Color...");self.clear_selection_outline=QPushButton("Deselect");second.addWidget(self.paste_selection);second.addWidget(self.replace_selection);second.addWidget(self.clear_selection_outline);box.addLayout(second)
+        self.selection_group.hide();side_layout.addWidget(self.selection_group)
+        self.fill_selection.clicked.connect(self._fill_selection);self.clear_selection_cells.clicked.connect(self._clear_selection_cells);self.copy_selection.clicked.connect(self._copy_selection);self.paste_selection.clicked.connect(self._paste_selection);self.replace_selection.clicked.connect(self._replace_in_selection);self.clear_selection_outline.clicked.connect(self.canvas.clear_selection)
 
     def _build_confetti_inspector(self,side_layout):
         group=QGroupBox();box=QVBoxLayout(group);self.inspect_confetti=QPushButton("Confetti Inspector");self.inspect_confetti.setCheckable(True);self.inspect_confetti.setStyleSheet("QPushButton { padding: 5px 10px; } QPushButton:checked { background-color: palette(highlight); color: palette(highlighted-text); font-weight: 600; }");box.addWidget(self.inspect_confetti)
@@ -55,12 +71,14 @@ class EditorPanel(QWidget):
         self.confetti_list.currentItemChanged.connect(self._confetti_item_changed);self.confetti_previous.clicked.connect(lambda:self._navigate_confetti(-1));self.confetti_next.clicked.connect(lambda:self._navigate_confetti(1))
 
     def set_pattern(self,pattern):
-        self.inspect_confetti.setChecked(False);self.pattern=pattern;self.confetti_analysis=None;self._confetti_selected_id=None;self.undo_stack=UndoStack();self.undo_stack.add_listener(self._history_changed);self.canvas.set_pattern(pattern,self.undo_stack);self.canvas.set_confetti_analysis(None);self.canvas.set_inspection_mode(False);self.highlight_confetti.setChecked(True);self.confetti_status.setText("Activate the inspector to analyze suspicious small regions.");self.confetti_list.clear();self.confetti_details.setText("Select a suspect region to inspect it.");self.tool_buttons["Eraser"].setEnabled(pattern.supports_transparency);self.select_tool("Pencil");self._populate_palette();self._refresh_used()
+        self.inspect_confetti.setChecked(False);self.pattern=pattern;self.confetti_analysis=None;self._confetti_selected_id=None;self.undo_stack=UndoStack();self.undo_stack.add_listener(self._history_changed);self.canvas.set_pattern(pattern,self.undo_stack);self.canvas.allow_selection_move=pattern.supports_transparency;self.canvas.set_confetti_analysis(None);self.canvas.set_inspection_mode(False);self.highlight_confetti.setChecked(True);self.confetti_status.setText("Activate the inspector to analyze suspicious small regions.");self.confetti_list.clear();self.confetti_details.setText("Select a suspect region to inspect it.");self.tool_buttons["Eraser"].setEnabled(pattern.supports_transparency);self.select_tool("Pencil");self._populate_palette();self._refresh_used();self._selection_changed(None)
         if pattern.usage:self.select_code(next(iter(pattern.usage)))
 
     def set_owned_codes(self,codes):self.owned_codes=set(codes);self._populate_palette()
 
-    def _tool_selected(self,button):self.canvas.tool=button.text()
+    def _tool_selected(self,button):
+        if self.inspect_confetti.isChecked():self.inspect_confetti.setChecked(False)
+        self.canvas.tool=button.text()
     def select_tool(self,name):
         button=self.tool_buttons[name];button.setChecked(True);self.canvas.tool=name
 
@@ -91,7 +109,7 @@ class EditorPanel(QWidget):
     def _pattern_changed(self):
         if self.confetti_analysis:
             self.confetti_analysis.stale=True;self.canvas.set_confetti_analysis(None);self.inspect_confetti.setChecked(False);self.confetti_status.setText("Pattern changed - activate the inspector to reanalyze confetti.")
-        self._refresh_used();self.select_code(self.canvas.selected_code);self._buttons();self.changed.emit()
+        self._refresh_used();self.select_code(self.canvas.selected_code);self._selection_changed(self.canvas.selection);self._buttons();self.changed.emit()
     def _history_changed(self,stack):
         self.undo.setEnabled(stack.can_undo);self.redo.setEnabled(stack.can_redo)
         self.undo.setText(f"Undo {stack.undo_text}" if stack.undo_text else "Undo")
@@ -109,11 +127,81 @@ class EditorPanel(QWidget):
         if QMessageBox.question(self,"Replace Color",f"Replace DMC {old} with DMC {new}?\n\n{count:,} cells will be changed.")!=QMessageBox.StandardButton.Yes:return
         changes=self.pattern.replace_color(old,new);self.undo_stack.push("Replace Color",changes);self.canvas.refresh();self._pattern_changed()
 
+    def _selection_changed(self,bounds):
+        self.selection_group.setVisible(bounds is not None)
+        if not bounds:return
+        left,top,right,bottom=bounds;width=right-left;height=bottom-top;drills=sum(value is not None for row in self.pattern.region_cells(bounds) for value in row)
+        self.selection_status.setText(f"Selection: {width} x {height} cells\n{width*height:,} cells selected | Drills: {drills:,}")
+        can_clear=self.pattern.supports_transparency;self.clear_selection_cells.setEnabled(can_clear);self.clear_selection_cells.setToolTip("Set selected cells to transparent / no drill." if can_clear else "Clear and Move require a transparency-enabled pattern.")
+        self.paste_selection.setEnabled(self._clipboard_compatible())
+
+    def _clipboard_compatible(self):
+        if not self.pattern_clipboard or not self.pattern:return False
+        if any(code is not None and code not in self.pattern.palette.by_code for code in self.pattern_clipboard.cells):return False
+        return self.pattern.supports_transparency or all(code is not None for code in self.pattern_clipboard.cells)
+
+    def _commit_region(self,label,changes,log_message):
+        if not self.undo_stack.push(label,changes):return False
+        LOG.info("%s: %s cells",log_message,len(changes));self.canvas.refresh();self._pattern_changed();return True
+
+    def _fill_selection(self):
+        if self.canvas.selection and self.canvas.selected_code:self._commit_region("Fill Selection",self.pattern.fill_region(self.canvas.selection,self.canvas.selected_code),"Selection filled")
+
+    def _clear_selection_cells(self):
+        if not self.canvas.selection:return
+        if not self.pattern.supports_transparency:QMessageBox.information(self,"Clear Selection","This pattern does not support transparent/no-drill cells. Clear Selection is available only for transparency-enabled patterns.");return
+        self._commit_region("Clear Selection",self.pattern.fill_region(self.canvas.selection,None),"Selection cleared")
+
+    def _copy_selection(self):
+        if not self.canvas.selection:return
+        self.pattern_clipboard=self.pattern.copy_region(self.canvas.selection);LOG.info("Selection copied: %sx%s",self.pattern_clipboard.width,self.pattern_clipboard.height);self._selection_changed(self.canvas.selection)
+
+    def _paste_selection(self):
+        clip=self.pattern_clipboard
+        if not clip or not self._clipboard_compatible():return
+        if self.canvas.selection:left,top=self.canvas.selection[:2]
+        elif self.canvas.last_mouse_cell:left,top=self.canvas.last_mouse_cell
+        else:
+            center=self.canvas.view_center_cell();left=center[0]-clip.width//2;top=center[1]-clip.height//2
+        left=max(0,min(self.pattern.width-clip.width,left));top=max(0,min(self.pattern.height-clip.height,top))
+        if clip.width>self.pattern.width or clip.height>self.pattern.height:QMessageBox.information(self,"Paste Selection","The copied region is larger than this pattern.");return
+        changes=self.pattern.paste_region(clip,left,top)
+        if self._commit_region("Paste Selection",changes,"Paste committed"):self.canvas.set_selection((left,top,left+clip.width,top+clip.height))
+
+    def _move_selection(self,bounds,destination):
+        if not self.pattern.supports_transparency:return
+        left,top=destination;width=bounds[2]-bounds[0];height=bounds[3]-bounds[1];changes=self.pattern.move_region(bounds,left,top)
+        if self._commit_region("Move Selection",changes,f"Selection moved {width}x{height}"):self.canvas.set_selection((left,top,left+width,top+height))
+
+    def _replace_in_selection(self):
+        bounds=self.canvas.selection
+        if not bounds:return
+        counts={}
+        for row in self.pattern.region_cells(bounds):
+            for code in row:
+                if code is not None:counts[code]=counts.get(code,0)+1
+        if not counts:QMessageBox.information(self,"Replace Color in Selection","The selection contains no DMC colors to replace.");return
+        dialog=QDialog(self);dialog.setWindowTitle("Replace Color in Selection");layout=QVBoxLayout(dialog);source=QComboBox();destination=QComboBox();affected=QLabel()
+        for code in sorted(counts,key=lambda item:(-counts[item],item)):
+            color=self.pattern.palette.by_code[code];source.addItem(f"DMC {code} - {color.name}",code)
+        for color in self.pattern.palette.colors:destination.addItem(f"DMC {color.code} - {color.name}",color.code)
+        if self.canvas.selected_code:
+            index=destination.findData(self.canvas.selected_code)
+            if index>=0:destination.setCurrentIndex(index)
+        def update_count(*_):affected.setText(f"{counts.get(source.currentData(),0):,} cells in the current selection will change.")
+        source.currentIndexChanged.connect(update_count);layout.addWidget(QLabel("Source color"));layout.addWidget(source);layout.addWidget(QLabel("Destination color"));layout.addWidget(destination);layout.addWidget(affected);update_count()
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel);buttons.accepted.connect(dialog.accept);buttons.rejected.connect(dialog.reject);layout.addWidget(buttons)
+        if dialog.exec()!=QDialog.DialogCode.Accepted:return
+        old=source.currentData();new=destination.currentData()
+        if old==new:return
+        self._commit_region("Replace Color in Selection",self.pattern.replace_color_in_region(bounds,old,new),"Selection color replaced")
+
     def _confidence_filter(self):
         return ({"High"},{"High","Medium"},{"High","Medium","Low"})[self.confetti_filter.currentIndex()]
 
     def _escape_confetti(self):
         if self.inspect_confetti.isChecked():self.inspect_confetti.setChecked(False)
+        elif self.canvas.selection:self.canvas.clear_selection()
 
     def _set_confetti_mode(self,active):
         self.confetti_content.setVisible(active);self.canvas.set_inspection_mode(active)

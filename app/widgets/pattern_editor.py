@@ -9,15 +9,18 @@ class PatternCanvas(QWidget):
     inspectorChanged=Signal(str)
     toolChanged=Signal(str)
     confettiRegionClicked=Signal(int)
+    selectionChanged=Signal(object)
+    moveSelectionRequested=Signal(object,object)
 
     def __init__(self,parent=None):
         super().__init__(parent);self.pattern=None;self.undo_stack=None;self.selected_code=None;self.tool="Pencil"
         self.cell_size=10;self.offset=QPoint(20,20);self.highlight=False;self.show_initial=False;self._image=QImage();self._stroke=[];self._painting=False;self._pan=None;self._last_cell=None
         self.confetti_analysis=None;self.confetti_confidences={"High"};self.confetti_cells={};self.selected_confetti_id=None;self.show_confetti=False;self.inspection_mode=False
-        self.setMouseTracking(True);self.setMinimumSize(400,350)
+        self.selection=None;self._selection_anchor=None;self._selection_press=None;self._selection_had_existing=False;self._selection_before_drag=None;self._move_origin=None;self._move_grab=None;self._move_preview=None;self.allow_selection_move=False;self.last_mouse_cell=None
+        self.setMouseTracking(True);self.setFocusPolicy(Qt.FocusPolicy.StrongFocus);self.setMinimumSize(400,350)
 
     def set_pattern(self,pattern,undo_stack):
-        self.pattern=pattern;self.undo_stack=undo_stack;self.selected_code=next(iter(pattern.usage),None);self.offset=QPoint(20,20);self.refresh()
+        self.pattern=pattern;self.undo_stack=undo_stack;self.selected_code=next(iter(pattern.usage),None);self.offset=QPoint(20,20);self.clear_selection();self.refresh()
 
     def refresh(self):
         if not self.pattern:return
@@ -48,17 +51,51 @@ class PatternCanvas(QWidget):
                 fill=colors[region.confidence];pen=QPen(QColor(fill.red(),fill.green(),fill.blue(),230),2 if region.region_id==self.selected_confetti_id else 1);painter.setPen(pen);painter.setBrush(fill)
                 for index in region.cells:
                     x=index%self.pattern.width;y=index//self.pattern.width;painter.drawRect(self.offset.x()+x*self.cell_size,self.offset.y()+y*self.cell_size,self.cell_size,self.cell_size)
+        if self.selection:
+            left,top,right,bottom=self._move_preview or self.selection;rect=QRectF(self.offset.x()+left*self.cell_size,self.offset.y()+top*self.cell_size,(right-left)*self.cell_size,(bottom-top)*self.cell_size)
+            if self._move_preview:painter.fillRect(rect,QColor(0,170,255,45))
+            pen=QPen(QColor(0,190,255),2);pen.setStyle(Qt.PenStyle.DashLine);painter.setPen(pen);painter.setBrush(Qt.BrushStyle.NoBrush);painter.drawRect(rect.adjusted(1,1,-1,-1))
 
-    def _cell(self,pos):
+    def grid_cell(self,pos,clamp=False):
         if not self.pattern:return None
         x=int((pos.x()-self.offset.x())//self.cell_size);y=int((pos.y()-self.offset.y())//self.cell_size)
+        if clamp:x=max(0,min(self.pattern.width-1,x));y=max(0,min(self.pattern.height-1,y))
         return (x,y) if 0<=x<self.pattern.width and 0<=y<self.pattern.height else None
+
+    def _cell(self,pos):return self.grid_cell(pos)
+
+    def normalized_selection(self,first,last):
+        left=min(first[0],last[0]);top=min(first[1],last[1]);right=max(first[0],last[0])+1;bottom=max(first[1],last[1])+1
+        return max(0,left),max(0,top),min(self.pattern.width,right),min(self.pattern.height,bottom)
+
+    def set_selection(self,bounds):
+        if bounds:
+            left,top,right,bottom=bounds;left=max(0,min(self.pattern.width,left));right=max(left,min(self.pattern.width,right));top=max(0,min(self.pattern.height,top));bottom=max(top,min(self.pattern.height,bottom));bounds=(left,top,right,bottom) if right>left and bottom>top else None
+        self.selection=bounds;self._move_preview=None;self.selectionChanged.emit(bounds);self.update()
+
+    def clear_selection(self):self.set_selection(None)
+
+    def select_all(self):
+        if self.pattern:self.set_selection((0,0,self.pattern.width,self.pattern.height))
+
+    def selection_contains(self,cell):
+        if not self.selection:return False
+        left,top,right,bottom=self.selection;return left<=cell[0]<right and top<=cell[1]<bottom
+
+    def view_center_cell(self):return self.grid_cell(self.rect().center(),True) if self.pattern else None
 
     def mousePressEvent(self,event):
         if event.button()==Qt.MouseButton.MiddleButton:self._pan=event.position();return
         if event.button()!=Qt.MouseButton.LeftButton or self.show_initial:return
         cell=self._cell(event.position())
         if cell is None:return
+        self.setFocus(Qt.FocusReason.MouseFocusReason);self.last_mouse_cell=cell
+        if self.tool=="Select":
+            self._selection_press=cell;self._selection_had_existing=self.selection is not None;self._selection_before_drag=self.selection
+            if self.allow_selection_move and self.selection_contains(cell):
+                self._move_origin=self.selection;self._move_grab=(cell[0]-self.selection[0],cell[1]-self.selection[1]);self._move_preview=self.selection
+            else:self._selection_anchor=cell
+            self.update();return
         index=cell[1]*self.pattern.width+cell[0]
         if self.inspection_mode:
             if index in self.confetti_cells:
@@ -76,8 +113,14 @@ class PatternCanvas(QWidget):
     def mouseMoveEvent(self,event):
         if self._pan is not None:
             delta=event.position()-self._pan;self.offset+=QPoint(round(delta.x()),round(delta.y()));self._pan=event.position();self.update();return
-        cell=self._cell(event.position())
+        cell=self.grid_cell(event.position(),self.tool=="Select" and self._selection_press is not None)
         if cell:
+            self.last_mouse_cell=cell
+            if self.tool=="Select" and self._selection_press is not None:
+                if self._move_origin:
+                    width=self._move_origin[2]-self._move_origin[0];height=self._move_origin[3]-self._move_origin[1];left=max(0,min(self.pattern.width-width,cell[0]-self._move_grab[0]));top=max(0,min(self.pattern.height-height,cell[1]-self._move_grab[1]));self._move_preview=(left,top,left+width,top+height);self.update()
+                elif self._selection_anchor:self.set_selection(self.normalized_selection(self._selection_anchor,cell))
+                return
             code=self.pattern.get(*cell)
             if code is None:self.inspectorChanged.emit(f"Cell: {cell[0]+1}, {cell[1]+1} | Transparent / Empty")
             else:
@@ -101,6 +144,17 @@ class PatternCanvas(QWidget):
         if event.button()==Qt.MouseButton.MiddleButton:self._pan=None
         if event.button()==Qt.MouseButton.LeftButton and self._painting:
             self._painting=False;self.undo_stack.push("Erase Stroke" if self.tool=="Eraser" else "Pencil Stroke",self._stroke);self._stroke=[];self._last_cell=None
+        if event.button()==Qt.MouseButton.LeftButton and self.tool=="Select" and self._selection_press is not None:
+            cell=self.grid_cell(event.position(),True)
+            if self._move_origin:
+                destination=self._move_preview or self._move_origin
+                if destination[:2]!=self._move_origin[:2]:self.moveSelectionRequested.emit(self._move_origin,destination[:2])
+                self._move_origin=None;self._move_grab=None;self._move_preview=None
+            elif self._selection_anchor:
+                if self._selection_had_existing and cell==self._selection_press and not self.selection_contains(cell):self.clear_selection()
+                elif self._selection_had_existing and cell==self._selection_press and self._selection_before_drag and not (self._selection_before_drag[0]<=cell[0]<self._selection_before_drag[2] and self._selection_before_drag[1]<=cell[1]<self._selection_before_drag[3]):self.clear_selection()
+                elif not self._selection_had_existing or cell!=self._selection_press:self.set_selection(self.normalized_selection(self._selection_anchor,cell))
+            self._selection_anchor=None;self._selection_press=None;self._selection_had_existing=False;self._selection_before_drag=None;self.update()
 
     def wheelEvent(self,event):
         old=self.cell_size;self.cell_size=max(2,min(40,self.cell_size+(1 if event.angleDelta().y()>0 else -1)))
