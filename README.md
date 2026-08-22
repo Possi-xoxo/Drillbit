@@ -26,6 +26,10 @@ Version 0.9 makes Drillbit a per-user single-instance Windows application. A sec
 
 Version 1.0 adds **Colors I Own**, a persistent personal DMC inventory. Use **Manage Colors I Own** to search by code or name, select colors, review owned colors, or clear the inventory. Enable **Only Use Colors I Own** to restrict the next automatic conversion or regeneration to that set; if fewer colors are owned than the requested maximum, Drillbit uses the owned count as the effective limit. Existing and manually edited patterns are never changed merely because inventory selections change, and the manual editor continues to offer every DMC color with owned colors marked by a check.
 
+Version 1.1 adds the non-destructive **Confetti Inspector** to the Pattern Editor. It finds four-connected logical color regions, scores small-region confidence using size, neighboring-color dominance, CIELAB similarity, fragmentation, and edge/detail protection, and highlights High, Medium, or Low suspects without changing the pattern. Inspect a result to see its DMC color, size, dominant neighbor, boundary share, color difference, and suggested replacement. Editing, undoing, or redoing marks the results stale and removes the overlay until **Reanalyze Confetti** is run manually.
+
+Version 1.1.1 reorganizes the Pattern Editor sidebar around the colors used by the current pattern and turns the Confetti Inspector into a checkable inspection mode. Used Colors receives three times the layout stretch of the searchable full DMC palette. Activating the inspector expands its controls, reuses valid cached results, and makes canvas clicks select suspects instead of painting; turning it off (or pressing Esc) collapses the controls and restores normal operation of the previously selected editing tool. Any pattern change invalidates cached results, removes the overlay, and exits inspection mode until the inspector is activated to reanalyze.
+
 The inventory is global rather than part of a `.diamond` project and is stored at `%LOCALAPPDATA%\Drillbit\owned_colors.json`, so it survives executable rebuilds and application updates. To reset it outside Drillbit, close the application and delete that file. The next launch starts with an empty inventory. If the file is corrupt, Drillbit preserves it, logs the parse failure, and safely starts with an empty inventory.
 
 ## Run from source
@@ -88,4 +92,4 @@ The 489-entry `DMC Reference Palette` was mechanically extracted from the open-s
 - Printable PDF export runs synchronously and can briefly make the window appear busy on unusually large patterns.
 - DMC RGB matching uses Delta E 1976 rather than newer Delta E 2000.
 - Project files do not yet preserve undo history; reopening starts a fresh undo stack.
-- Automatic confetti cleanup is not implemented; the internal connected-region analysis reports small regions without changing them.
+- Automatic confetti cleanup is intentionally not implemented. The Pattern Editor's Confetti Inspector reports and highlights small suspect regions without changing them; replacement decisions remain manual.

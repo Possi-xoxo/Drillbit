@@ -8,10 +8,12 @@ class PatternCanvas(QWidget):
     selectedColorChanged=Signal(object)
     inspectorChanged=Signal(str)
     toolChanged=Signal(str)
+    confettiRegionClicked=Signal(int)
 
     def __init__(self,parent=None):
         super().__init__(parent);self.pattern=None;self.undo_stack=None;self.selected_code=None;self.tool="Pencil"
         self.cell_size=10;self.offset=QPoint(20,20);self.highlight=False;self.show_initial=False;self._image=QImage();self._stroke=[];self._painting=False;self._pan=None;self._last_cell=None
+        self.confetti_analysis=None;self.confetti_confidences={"High"};self.confetti_cells={};self.selected_confetti_id=None;self.show_confetti=False;self.inspection_mode=False
         self.setMouseTracking(True);self.setMinimumSize(400,350)
 
     def set_pattern(self,pattern,undo_stack):
@@ -39,6 +41,13 @@ class PatternCanvas(QWidget):
                 strong=x%10==0;painter.setPen(QPen(QColor(20,20,20,210 if strong else 90),2 if strong else 1));px=self.offset.x()+x*self.cell_size;painter.drawLine(px,self.offset.y(),px,self.offset.y()+self.pattern.height*self.cell_size)
             for y in range(self.pattern.height+1):
                 strong=y%10==0;painter.setPen(QPen(QColor(20,20,20,210 if strong else 90),2 if strong else 1));py=self.offset.y()+y*self.cell_size;painter.drawLine(self.offset.x(),py,self.offset.x()+self.pattern.width*self.cell_size,py)
+        if self.show_confetti and self.confetti_analysis and not self.confetti_analysis.stale:
+            colors={"High":QColor(255,0,170,90),"Medium":QColor(255,145,0,85),"Low":QColor(0,200,255,70)}
+            for region in self.confetti_analysis.suspects:
+                if region.confidence not in self.confetti_confidences:continue
+                fill=colors[region.confidence];pen=QPen(QColor(fill.red(),fill.green(),fill.blue(),230),2 if region.region_id==self.selected_confetti_id else 1);painter.setPen(pen);painter.setBrush(fill)
+                for index in region.cells:
+                    x=index%self.pattern.width;y=index//self.pattern.width;painter.drawRect(self.offset.x()+x*self.cell_size,self.offset.y()+y*self.cell_size,self.cell_size,self.cell_size)
 
     def _cell(self,pos):
         if not self.pattern:return None
@@ -50,6 +59,11 @@ class PatternCanvas(QWidget):
         if event.button()!=Qt.MouseButton.LeftButton or self.show_initial:return
         cell=self._cell(event.position())
         if cell is None:return
+        index=cell[1]*self.pattern.width+cell[0]
+        if self.inspection_mode:
+            if index in self.confetti_cells:
+                self.selected_confetti_id=self.confetti_cells[index];self.confettiRegionClicked.emit(self.selected_confetti_id);self.update()
+            return
         if self.tool=="Eyedropper":
             picked=self.pattern.get(*cell)
             if picked is None:self.tool="Eraser";self.toolChanged.emit("Eraser");self.inspectorChanged.emit(f"Cell: {cell[0]+1}, {cell[1]+1} | Transparent / Empty")
@@ -94,3 +108,26 @@ class PatternCanvas(QWidget):
             pos=event.position();ratio=self.cell_size/old;self.offset=QPoint(round(pos.x()-(pos.x()-self.offset.x())*ratio),round(pos.y()-(pos.y()-self.offset.y())*ratio));self.update()
 
     def leaveEvent(self,_event):self.inspectorChanged.emit("")
+
+    def set_confetti_analysis(self,analysis,confidences=None):
+        self.confetti_analysis=analysis;self.confetti_confidences=set(confidences or {"High"});self.confetti_cells={};self.selected_confetti_id=None
+        if analysis and not analysis.stale:
+            for region in analysis.suspects:
+                if region.confidence in self.confetti_confidences:
+                    for index in region.cells:self.confetti_cells[index]=region.region_id
+        self.update()
+
+    def set_confetti_filter(self,confidences):
+        selected=self.selected_confetti_id;self.confetti_confidences=set(confidences);self.set_confetti_analysis(self.confetti_analysis,self.confetti_confidences);self.selected_confetti_id=selected;self.update()
+
+    def set_inspection_mode(self,active):
+        self.inspection_mode=bool(active)
+        if not active:self.selected_confetti_id=None
+        self.update()
+
+    def select_confetti_region(self,region_id):self.selected_confetti_id=region_id;self.update()
+
+    def center_on_cell(self,index):
+        if not self.pattern:return
+        self.cell_size=max(10,self.cell_size);x=index%self.pattern.width;y=index//self.pattern.width
+        self.offset=QPoint(round(self.width()/2-(x+.5)*self.cell_size),round(self.height()/2-(y+.5)*self.cell_size));self.update()
