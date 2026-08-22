@@ -10,4 +10,4 @@ if (Test-Path ".\python313\python.exe") {
 & $BuildPython -m pip install -r requirements.txt
 & $BuildPython -m pytest
 & $BuildPython -m PyInstaller --noconfirm --clean DiamondArtConverter.spec
-Write-Host "Build complete: $ProjectRoot\dist\Diamond Art Converter\Diamond Art Converter.exe"
+Write-Host "Build complete: $ProjectRoot\dist\Drillbit\Drillbit.exe"

@@ -20,7 +20,7 @@ def test_activation_payload_round_trip_with_no_files():
 
 
 def test_activation_payload_round_trip_with_one_fragmented_file(tmp_path):
-    project=tmp_path/"art.diamond";payload=activation_payload([project]);framed=encode_payload(payload);buffer=bytearray()
+    project=tmp_path/"art.drillbit";payload=activation_payload([project]);framed=encode_payload(payload);buffer=bytearray()
     buffer.extend(framed[:3]);assert extract_frames(buffer)==[]
     buffer.extend(framed[3:9]);assert extract_frames(buffer)==[]
     buffer.extend(framed[9:]);frames=extract_frames(buffer)
@@ -62,13 +62,14 @@ def test_stale_endpoint_is_removed_only_after_failed_connect_retries():
 
 
 def test_file_selection_validates_existence_type_and_uses_first_supported(tmp_path):
-    image=tmp_path/"first.png";project=tmp_path/"second.diamond";image.touch();project.touch()
+    image=tmp_path/"first.png";project=tmp_path/"second.drillbit";legacy=tmp_path/"old.diamond";image.touch();project.touch();legacy.touch()
     assert select_incoming_file([tmp_path/"missing.png",tmp_path/"bad.txt",image,project])==image
+    assert select_incoming_file([project])==project and select_incoming_file([legacy])==legacy
     assert select_incoming_file([tmp_path/"missing.diamond",tmp_path/"bad.txt"]) is None
 
 
 def test_command_line_file_collection_ignores_switches():
-    assert command_line_files(["Drillbit.exe","--test-mode",r"C:\Art\one.diamond"])==[r"C:\Art\one.diamond"]
+    assert command_line_files(["Drillbit.exe","--test-mode",r"C:\Art\one.drillbit",r"C:\Art\old.diamond"])==[r"C:\Art\one.drillbit",r"C:\Art\old.diamond"]
 
 
 def test_incoming_file_handoff_respects_unsaved_confirmation(tmp_path):

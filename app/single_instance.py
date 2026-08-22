@@ -14,13 +14,14 @@ from typing import Callable
 from PySide6.QtCore import QObject, QStandardPaths, Signal
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMessageBox
+from .project_format import SUPPORTED_PROJECT_EXTENSIONS
 
 LOG=logging.getLogger(__name__)
 PROTOCOL_VERSION=1
 MAX_MESSAGE_BYTES=1024*1024
 CONNECT_TIMEOUT_MS=180
 RETRY_COUNT=5
-SUPPORTED_FILE_SUFFIXES={".diamond",".jpg",".jpeg",".png",".webp",".bmp"}
+SUPPORTED_FILE_SUFFIXES=SUPPORTED_PROJECT_EXTENSIONS|{".jpg",".jpeg",".png",".webp",".bmp"}
 
 
 def _user_identity_seed():

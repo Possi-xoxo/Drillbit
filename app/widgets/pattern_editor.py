@@ -1,7 +1,20 @@
-from PySide6.QtCore import QPoint, QRectF, Qt, Signal
+from PySide6.QtCore import QLineF, QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QWidget
 from PIL.ImageQt import ImageQt
+
+FIT_MARGIN_RATIO=.80
+MIN_RENDER_CELL_SIZE=.10
+INITIAL_FIT_CELL_SIZE_CEILING=20.0
+MAX_CELL_SIZE=40.0
+ZOOM_EPSILON=1e-6
+
+
+def calculate_minimum_cell_size(viewport_width,viewport_height,pattern_width,pattern_height,fit_margin_ratio=FIT_MARGIN_RATIO):
+    """Return the per-cell display size that comfortably fits the full pattern."""
+    if viewport_width<=0 or viewport_height<=0 or pattern_width<=0 or pattern_height<=0:return MIN_RENDER_CELL_SIZE
+    fit=min(viewport_width*fit_margin_ratio/pattern_width,viewport_height*fit_margin_ratio/pattern_height)
+    return max(MIN_RENDER_CELL_SIZE,min(INITIAL_FIT_CELL_SIZE_CEILING,fit))
 
 class PatternCanvas(QWidget):
     patternChanged=Signal()
@@ -14,13 +27,28 @@ class PatternCanvas(QWidget):
 
     def __init__(self,parent=None):
         super().__init__(parent);self.pattern=None;self.undo_stack=None;self.selected_code=None;self.tool="Pencil"
-        self.cell_size=10;self.offset=QPoint(20,20);self.highlight=False;self.show_initial=False;self._image=QImage();self._source_reference=QImage();self.show_source_overlay=False;self.source_overlay_opacity=.4;self.replacement_preview=None;self._stroke=[];self._painting=False;self._pan=None;self._last_cell=None
+        self.cell_size=10.0;self._minimum_cell_size=MIN_RENDER_CELL_SIZE;self.offset=QPoint(20,20);self.highlight=False;self.show_initial=False;self._image=QImage();self._source_reference=QImage();self.show_source_overlay=False;self.source_overlay_opacity=.4;self.replacement_preview=None;self._stroke=[];self._painting=False;self._pan=None;self._last_cell=None
         self.confetti_analysis=None;self.confetti_confidences={"High"};self.confetti_cells={};self.selected_confetti_id=None;self.show_confetti=False;self.inspection_mode=False
         self.selection=None;self._selection_anchor=None;self._selection_press=None;self._selection_had_existing=False;self._selection_before_drag=None;self._move_origin=None;self._move_grab=None;self._move_preview=None;self.allow_selection_move=False;self.last_mouse_cell=None
         self.setMouseTracking(True);self.setFocusPolicy(Qt.FocusPolicy.StrongFocus);self.setMinimumSize(400,350)
 
     def set_pattern(self,pattern,undo_stack):
-        self.pattern=pattern;self.undo_stack=undo_stack;self.selected_code=next(iter(pattern.usage),None);self.replacement_preview=None;self.offset=QPoint(20,20);self.clear_selection();self.refresh()
+        self.pattern=pattern;self.undo_stack=undo_stack;self.selected_code=next(iter(pattern.usage),None);self.replacement_preview=None;self._minimum_cell_size=self.calculate_minimum_zoom();self.cell_size=self._minimum_cell_size;self._center_pattern();self.clear_selection();self.refresh()
+
+    def calculate_minimum_zoom(self):
+        return calculate_minimum_cell_size(self.width(),self.height(),self.pattern.width,self.pattern.height) if self.pattern else MIN_RENDER_CELL_SIZE
+
+    def _at_minimum_zoom(self):return abs(self.cell_size-self._minimum_cell_size)<=ZOOM_EPSILON
+    def _center_pattern(self):
+        if self.pattern:self.offset=QPoint(round((self.width()-self.pattern.width*self.cell_size)/2),round((self.height()-self.pattern.height*self.cell_size)/2))
+    def fit_pattern(self):
+        if not self.pattern:return
+        self._minimum_cell_size=self.calculate_minimum_zoom();self.cell_size=self._minimum_cell_size;self._center_pattern();self.update()
+
+    def resizeEvent(self,event):
+        was_at_minimum=self._at_minimum_zoom();self._minimum_cell_size=self.calculate_minimum_zoom()
+        if self.pattern and (was_at_minimum or self.cell_size<self._minimum_cell_size-ZOOM_EPSILON):self.cell_size=self._minimum_cell_size;self._center_pattern()
+        super().resizeEvent(event)
 
     def refresh(self):
         if not self.pattern:return
@@ -61,13 +89,13 @@ class PatternCanvas(QWidget):
                 if region.confidence not in self.confetti_confidences:continue
                 fill=colors[region.confidence];pen=QPen(QColor(fill.red(),fill.green(),fill.blue(),230),2 if region.region_id==self.selected_confetti_id else 1);painter.setPen(pen);painter.setBrush(fill)
                 for index in region.cells:
-                    x=index%self.pattern.width;y=index//self.pattern.width;painter.drawRect(self.offset.x()+x*self.cell_size,self.offset.y()+y*self.cell_size,self.cell_size,self.cell_size)
+                    x=index%self.pattern.width;y=index//self.pattern.width;painter.drawRect(QRectF(self.offset.x()+x*self.cell_size,self.offset.y()+y*self.cell_size,self.cell_size,self.cell_size))
         if self.cell_size>=5:
             painter.setBrush(Qt.BrushStyle.NoBrush)
             for x in range(self.pattern.width+1):
-                strong=x%10==0;painter.setPen(QPen(QColor(20,20,20,210 if strong else 90),2 if strong else 1));px=self.offset.x()+x*self.cell_size;painter.drawLine(px,self.offset.y(),px,self.offset.y()+self.pattern.height*self.cell_size)
+                strong=x%10==0;painter.setPen(QPen(QColor(20,20,20,210 if strong else 90),2 if strong else 1));px=self.offset.x()+x*self.cell_size;painter.drawLine(QLineF(px,self.offset.y(),px,self.offset.y()+self.pattern.height*self.cell_size))
             for y in range(self.pattern.height+1):
-                strong=y%10==0;painter.setPen(QPen(QColor(20,20,20,210 if strong else 90),2 if strong else 1));py=self.offset.y()+y*self.cell_size;painter.drawLine(self.offset.x(),py,self.offset.x()+self.pattern.width*self.cell_size,py)
+                strong=y%10==0;painter.setPen(QPen(QColor(20,20,20,210 if strong else 90),2 if strong else 1));py=self.offset.y()+y*self.cell_size;painter.drawLine(QLineF(self.offset.x(),py,self.offset.x()+self.pattern.width*self.cell_size,py))
         if self.selection:
             left,top,right,bottom=self._move_preview or self.selection;rect=QRectF(self.offset.x()+left*self.cell_size,self.offset.y()+top*self.cell_size,(right-left)*self.cell_size,(bottom-top)*self.cell_size)
             if self._move_preview:painter.fillRect(rect,QColor(0,170,255,45))
@@ -129,7 +157,9 @@ class PatternCanvas(QWidget):
 
     def mouseMoveEvent(self,event):
         if self._pan is not None:
-            delta=event.position()-self._pan;self.offset+=QPoint(round(delta.x()),round(delta.y()));self._pan=event.position();self.update();return
+            delta=event.position()-self._pan;self.offset+=QPoint(round(delta.x()),round(delta.y()));self._pan=event.position()
+            if self._at_minimum_zoom():self._center_pattern()
+            self.update();return
         cell=self.grid_cell(event.position(),self.tool=="Select" and self._selection_press is not None)
         if cell:
             self.last_mouse_cell=cell
@@ -174,9 +204,12 @@ class PatternCanvas(QWidget):
             self._selection_anchor=None;self._selection_press=None;self._selection_had_existing=False;self._selection_before_drag=None;self.update()
 
     def wheelEvent(self,event):
-        old=self.cell_size;self.cell_size=max(2,min(40,self.cell_size+(1 if event.angleDelta().y()>0 else -1)))
+        self._minimum_cell_size=self.calculate_minimum_zoom();old=self.cell_size;self.cell_size=max(self._minimum_cell_size,min(MAX_CELL_SIZE,self.cell_size+(1 if event.angleDelta().y()>0 else -1)))
         if old!=self.cell_size:
-            pos=event.position();ratio=self.cell_size/old;self.offset=QPoint(round(pos.x()-(pos.x()-self.offset.x())*ratio),round(pos.y()-(pos.y()-self.offset.y())*ratio));self.update()
+            if self._at_minimum_zoom():self._center_pattern()
+            else:
+                pos=event.position();ratio=self.cell_size/old;self.offset=QPoint(round(pos.x()-(pos.x()-self.offset.x())*ratio),round(pos.y()-(pos.y()-self.offset.y())*ratio))
+            self.update()
 
     def leaveEvent(self,_event):self.inspectorChanged.emit("")
 
@@ -200,5 +233,5 @@ class PatternCanvas(QWidget):
 
     def center_on_cell(self,index):
         if not self.pattern:return
-        self.cell_size=max(10,self.cell_size);x=index%self.pattern.width;y=index//self.pattern.width
+        self._minimum_cell_size=self.calculate_minimum_zoom();self.cell_size=min(MAX_CELL_SIZE,max(10.0,self._minimum_cell_size,self.cell_size));x=index%self.pattern.width;y=index//self.pattern.width
         self.offset=QPoint(round(self.width()/2-(x+.5)*self.cell_size),round(self.height()/2-(y+.5)*self.cell_size));self.update()

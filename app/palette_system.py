@@ -14,7 +14,7 @@ class PaletteColor:
 
 class ReferencePalette:
     def __init__(self, name, colors, source="", accuracy_note=""):
-        self.name=name; self.colors=tuple(colors); self.source=source; self.accuracy_note=accuracy_note
+        self.name=name; self.colors=tuple(colors);validate_palette_colors(self.colors);self.source=source;self.accuracy_note=accuracy_note
         self.by_code={color.code:color for color in self.colors}
         self._labs={color.code:rgb_to_lab(color.rgb) for color in self.colors}
 
@@ -37,6 +37,17 @@ def palette_path(filename="dmc.json"):
     return base/"palettes"/filename
 
 def load_dmc_palette(): return ReferencePalette.load(palette_path())
+
+def validate_palette_colors(colors):
+    if not colors:raise ValueError("A reference palette must contain at least one color.")
+    seen=set()
+    for index,color in enumerate(colors):
+        if not isinstance(color.code,str) or not color.code.strip():raise ValueError(f"Palette color {index} has an invalid DMC code.")
+        if color.code in seen:raise ValueError(f"Duplicate DMC code in reference palette: {color.code}")
+        seen.add(color.code)
+        if not isinstance(color.name,str) or not color.name.strip():raise ValueError(f"DMC {color.code} has an invalid name.")
+        if len(color.rgb)!=3 or any(not isinstance(channel,int) or isinstance(channel,bool) or not 0<=channel<=255 for channel in color.rgb):
+            raise ValueError(f"DMC {color.code} has invalid RGB values.")
 
 def rgb_to_lab(rgb):
     values=[]

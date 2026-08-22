@@ -1,107 +1,91 @@
-# Diamond Art Converter
+# Drillbit 1.0.0
 
-An offline Windows desktop app that turns photos into controlled diamond-art grids. One logical output pixel equals one physical drill. It supports JPG/JPEG, PNG, WEBP, and BMP; exact dimensions; fit/crop; median-cut color reduction; optional dithering and grids; adjustments; palette counts; and lossless PNG export.
+Drillbit is an offline Windows desktop application for turning images into editable DMC diamond-art patterns. One logical pattern cell represents one physical drill.
 
-Version 0.2 adds physical drill sizing, finished dimensions in metric and imperial units, size entry by diamonds or finished size, interactive drag/wheel cropping, and true-scale tiled US Letter PDF patterns with overlap, registration marks, calibration squares, and a color legend.
+## What Drillbit supports
 
-Version 0.3 makes the logical DMC-code grid authoritative and adds a searchable manual pattern editor. Automatic conversion is constrained to the built-in DMC Reference Palette. The editor supports zoom, middle-button pan, pencil strokes, eyedropper, four-direction flood fill, selected-color highlighting, global color replacement, undo/redo, used-color statistics, before/edited comparison, and self-contained `.diamond` project files.
+- JPG/JPEG, PNG, WEBP, and BMP source images
+- Exact dimensions, crop/reposition controls, adjustments, and optional dithering
+- Conversion to the validated 489-color DMC Reference Palette with 8–64 target colors
+- Persistent **Colors I Own** inventory and owned-colors-only conversion
+- Optional source transparency and empty/no-drill cells
+- Pencil, Eyedropper, Flood Fill, Eraser, selection, copy/paste, move, fill, clear, and color replacement
+- Transactional Undo/Redo for logical pattern edits
+- Non-destructive Confetti Inspector and aligned Source Image Overlay
+- Square or Round Finished Preview without changing the logical grid
+- PNG export and physically scaled, tiled PDFs with deterministic symbols and legends
+- Native `.drillbit` projects containing the source, settings, logical grid, edits, and project preferences
+- Read compatibility with legacy `.diamond` projects
+- Per-user single-instance behavior and local rotating crash diagnostics
 
-Version 0.3.1 makes edit history transactional and observable: completed pencil strokes, flood fills, and replacements synchronously update Undo/Redo state, while no-op edits create no history.
+## Basic workflow
 
-Version 0.3.2 replaces the editor tool dropdown with an exclusive, clearly highlighted Pencil / Eyedropper / Flood Fill button group.
+1. Choose **Open Image** or drop a supported image onto Drillbit.
+2. Set the dimensions, image fit, maximum colors, and optional adjustments.
+3. Use **2. Edit Pattern** for cell-level edits and Undo/Redo.
+4. Use **3. Finished Preview** to inspect Square or Round drills.
+5. Choose **Save Project** to create a `.drillbit` project.
+6. Export a PNG or create a tiled **Print Pattern PDF**. Print at **100% / Actual Size**, never Fit to Page.
 
-Version 0.4 treats Maximum Colors as a meaningful target. Palette optimization now analyzes candidate regions at logical drill resolution, balances coverage, CIELAB distinctiveness, spatial coherence, local contrast, and four-connected confetti metrics, considers close alternative DMC matches to avoid duplicate collapse, and remains deterministic.
+View-only controls—including zoom, pan, selection creation, source-overlay controls, color highlighting, confetti navigation, and Finished Preview zoom—do not alter the logical pattern. Exports use the edited grid and never include editor overlays.
 
-Version 0.5 adds optional source-alpha preservation. Enable **Preserve Transparency** to convert low-coverage cells to empty/no-drill cells, exclude them from DMC selection and drill totals, edit them over a checkerboard with Pencil/Flood Fill/Eraser, preserve them in projects and PNG exports, and leave them empty in printable PDFs. The option defaults off, which composites source alpha onto pure white for backward-compatible conversion.
+## Projects and compatibility
 
-Version 0.6 makes initial palette construction fidelity-first. It analyzes a fixed 4-bit-per-channel histogram of up to 4,096 weighted source colors, unions multiple nearby DMC candidates for every source color, and grows the palette by the reduction in remaining CIELAB reconstruction error. Dominant cluster weights use a 0.72 power so large areas remain important without suppressing smaller color families. Confetti is measured after assignment and does not reject colors during palette construction.
+`.drillbit` is the native extension. Projects are self-contained ZIP archives with versioned JSON and an optional embedded PNG source. Version 1.0.0 retains the existing internal schema; the extension migration does not change pattern data.
 
-Version 0.7 adds local crash diagnostics. Drillbit writes INFO-level rotating logs to `%LOCALAPPDATA%\Drillbit\logs\drillbit.log` and native Python fault output to `drillbit_fault.log`. Use **Help > Diagnostics > Open Latest Log** or **Open Log Folder** to retrieve them, then provide the latest log when investigating a crash. Logs include environment details, conversion settings and timings, memory-shape estimates, significant actions, and exception tracebacks; they do not contain source-image pixels, telemetry, or uploads. Python exception hooks and `faulthandler` improve coverage, but a sufficiently abrupt operating-system or native-library failure can still terminate the process before diagnostics are flushed.
+Legacy `.diamond` projects use the same loader. Drillbit does not rewrite them on open. The first normal Save requests a `.drillbit` destination and leaves the legacy file untouched. Older Drillbit builds are not expected to recognize the new extension.
 
-Version 0.8 adds printable PDF symbols and dedicated legends without changing the on-screen editor. Every currently used DMC color receives a deterministic project-persisted ASCII symbol. Printable chart cells combine color and a high-contrast symbol, while transparent cells remain empty. PDF options allow symbols and legends to be disabled independently, and large legends automatically continue across pages.
+Future Windows packaging should associate only `.drillbit` with **Drillbit Project** and `Drillbit.exe`. Drillbit does not modify registry associations at runtime and does not claim `.diamond` globally.
 
-Version 0.8.1 makes symbolized PDFs responsive in common viewers. Each chart tile is rendered once as a lossless 600-DPI image and embedded at the exact physical size dictated by the drill pitch. The searchable legend, calibration squares, footer, and registration marks remain vector PDF content. Export logging records per-tile raster, symbol, encoding, embedding, and final-save timings without logging individual cells.
+## Colors I Own
 
-Version 0.9 makes Drillbit a per-user single-instance Windows application. A second launch sends a length-prefixed JSON activation request through Qt local IPC and exits, while the running window restores, raises, and requests focus. Image and `.diamond` command-line paths are forwarded to the existing window and pass through the normal unsaved-work confirmation flow. Bounded connection retries and verified stale-endpoint cleanup cover rapid double-clicks and abnormal exits.
+The global inventory is stored at `%LOCALAPPDATA%\Drillbit\owned_colors.json` and survives executable replacement. Invalid codes are ignored. If the JSON is corrupt, Drillbit preserves it, logs the problem, and starts safely with an empty inventory.
 
-Version 1.0 adds **Colors I Own**, a persistent personal DMC inventory. Use **Manage Colors I Own** to search by code or name, select colors, review owned colors, or clear the inventory. Enable **Only Use Colors I Own** to restrict the next automatic conversion or regeneration to that set; if fewer colors are owned than the requested maximum, Drillbit uses the owned count as the effective limit. Existing and manually edited patterns are never changed merely because inventory selections change, and the manual editor continues to offer every DMC color with owned colors marked by a check.
+## Diagnostics
 
-Version 1.1 adds the non-destructive **Confetti Inspector** to the Pattern Editor. It finds four-connected logical color regions, scores small-region confidence using size, neighboring-color dominance, CIELAB similarity, fragmentation, and edge/detail protection, and highlights High, Medium, or Low suspects without changing the pattern. Inspect a result to see its DMC color, size, dominant neighbor, boundary share, color difference, and suggested replacement. Editing, undoing, or redoing marks the results stale and removes the overlay until **Reanalyze Confetti** is run manually.
+Logs are stored under `%LOCALAPPDATA%\Drillbit\logs\`. Use **Help > Diagnostics** to open the latest log, open its folder, or copy a diagnostic summary. Logs rotate at a bounded size and contain runtime details, settings summaries, timings, significant actions, and tracebacks—not source-image pixels or telemetry. Exception hooks, thread exception logging, `faulthandler`, and a session marker provide crash coverage.
 
-Version 1.1.1 reorganizes the Pattern Editor sidebar around the colors used by the current pattern and turns the Confetti Inspector into a checkable inspection mode. Used Colors receives three times the layout stretch of the searchable full DMC palette. Activating the inspector expands its controls, reuses valid cached results, and makes canvas clicks select suspects instead of painting; turning it off (or pressing Esc) collapses the controls and restores normal operation of the previously selected editing tool. Any pattern change invalidates cached results, removes the overlay, and exits inspection mode until the inspector is activated to reanalyze.
+## Development and testing
 
-Version 1.2 adds logical-grid rectangle selection and region editing to the Pattern Editor. The **Select** tool supports grid-snapped drag selection and, for transparency-enabled patterns, drag-to-move with a non-destructive destination preview. Contextual controls and standard shortcuts provide Select All (`Ctrl+A`), Copy (`Ctrl+C`), Paste (`Ctrl+V`), Delete/Clear (`Delete`), Fill, Deselect (`Esc`), and color replacement limited to the selected rectangle. Clipboard data stores DMC IDs and transparent cells internally and remains available while Drillbit is open. Every pattern-changing region operation records one exact delta command, so undo restores overwritten move/paste destinations as well as source cells. Because opaque patterns have no logical empty state and already disable Eraser, Clear and Move are disabled for those patterns rather than introducing transparency or an arbitrary background color.
-
-Version 1.3 adds an adjustable **Source Image Overlay** reference layer to the Pattern Editor. Drillbit reconstructs the same crop, fit/fill composition, brightness, contrast, saturation, aspect ratio, and alpha handling used for conversion, but retains source detail in a cached image up to 4,096 pixels on its long edge. The logical pattern, source reference, confetti highlights, grid, and selection overlays remain separate render layers, so opacity and visibility never alter cells, undo history, statistics, or exports. Projects already embed their original source, so only lightweight reconstruction settings and the optional view preference are added; older or source-less projects simply leave the overlay disabled.
-
-Version 1.4 separates logical cells, physical **Drill Pitch**, and visual **Drill Shape**. Square and Round never change the rectangular logical grid, DMC assignments, counts, dimensions, editor behavior, or undo history. A dedicated Finished Preview tab renders the authoritative edited pattern as a cached square mosaic or anti-aliased circles on orthogonal cell centers; round drills use a centralized 92% diameter-to-pitch ratio and expose a selectable White or Black canvas background. The preview supports fit, zoom, pan, and an optional lightweight grid while excluding source, confetti, selection, and symbol layers. Project settings persist shape/background preferences.
-
-Version 1.4.1 extends Drill Shape to printable pattern PDFs. Square charts retain the existing colored square cells, centered symbols, and global 10-cell guides. Round charts use the same orthogonal logical grid and 92% diameter-to-pitch ratio, rendering anti-aliased colored circles on printable white while keeping symbols centered inside each drill and preserving the square grid, registration, overlap, calibration, page layout, physical size, drill counts, and rasterized one-image-per-chart-page architecture.
-
-Version 1.4.2 stabilizes the Confetti Inspector navigation layout. Summary, suspect-list, navigation, and selected-region details now occupy dedicated bounded slots; long wrapped details remain fully available through an internal scrollbar, while equal-sized Previous and Next buttons stay fixed during selection, filtering, and sidebar resizing.
-
-Version 1.5 replaces the ambiguous global color-replacement button with a contextual workflow beneath Used Colors. Selecting a used color now identifies the global source and affected drill count, offers LAB/Delta E-ordered substitutes, supports replacement-specific search and owned-color filtering, and shows the closest owned alternative. An optional canvas-only preview substitutes the destination appearance without touching logical cells, usage, history, confetti analysis, or project state. Apply still records one exact global delta command, immediately refreshes statistics, selects the destination color, and remains fully undoable; Cancel simply removes the preview.
-
-The inventory is global rather than part of a `.diamond` project and is stored at `%LOCALAPPDATA%\Drillbit\owned_colors.json`, so it survives executable rebuilds and application updates. To reset it outside Drillbit, close the application and delete that file. The next launch starts with an empty inventory. If the file is corrupt, Drillbit preserves it, logs the parse failure, and safely starts with an empty inventory.
-
-## Run from source
-
-Python 3.11–3.13 is recommended for packaging. A project-local portable Python 3.13 runtime is included for reproducible builds because Python 3.14 currently has a Qt/PyInstaller DLL packaging incompatibility.
+Python 3.11–3.13 is recommended.
 
 ```powershell
 py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe main.py
 ```
 
-Drop an image on the window or use **Open Image**. Drag within the crop rectangle to reposition the source and use the mouse wheel to zoom; Reset Crop restores the largest centered crop at the pattern aspect ratio. Pattern Pixels exports one pixel per drill; Large Reference Image enlarges each cell with nearest-neighbor scaling. Print Pattern PDF creates a physically scaled, multi-page chart; print it at **100% / Actual Size**, never Fit to Page.
-
-After conversion, open **2. Edit Pattern**. Select a DMC color from the searchable list and use Pencil or Flood Fill, or use Eyedropper to pick from the design. The mouse wheel zooms the pattern and the middle mouse button pans. A continuous pencil drag is one undo action. Select a color in Used Colors, select its replacement in the DMC Palette, then choose Replace Used Color. PNG and PDF export always use the current edited pattern.
-
-Use **Save Project** to create a `.diamond` file. The ZIP-based project format embeds the source as PNG plus JSON containing crop/conversion settings, drill size, DMC IDs, initial automatic grid, and current edited grid. Opening it restores edits without reconversion. An asterisk in the title indicates unsaved changes.
-
-## Test and build
+Build the Windows release with:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-The build script creates the environment, installs dependencies, tests, and invokes PyInstaller. The standalone, windowed folder build is `dist\Diamond Art Converter\Diamond Art Converter.exe`; keep the `_internal` folder beside the EXE. The destination PC does not need Python. A folder build is used because Qt's DLLs are more reliable when loaded directly than when unpacked by PyInstaller's one-file bootloader.
+The PyInstaller folder build is `dist\Drillbit\Drillbit.exe`; its adjacent `_internal` folder is required. The packaged Windows target does not require system Python.
 
-## Structure
+## Repository structure
 
 - `main.py` — entry point
-- `app/main_window.py` — PySide6 UI
-- `app/image_processor.py` — image loading and conversion core
-- `app/exporter.py` — PNG rendering/export
-- `app/pdf_exporter.py` — true-scale PDF chart and legend rendering
-- `app/physical.py` — physical sizing and page-tiling calculations
-- `app/palette_system.py` / `palettes/dmc.json` — replaceable named palette subsystem and DMC reference data
-- `app/pattern_model.py` — semantic cell-ID grid, incremental statistics, and delta undo/redo
-- `app/pattern_converter.py` — adjusted image to DMC logical-pattern conversion
-- `app/pattern_analysis.py` — connected-region analysis foundation
-- `app/project_io.py` — self-contained `.diamond` save/load
-- `app/inventory.py` / `app/widgets/inventory_dialog.py` — persistent Colors I Own storage and searchable manager
-- `app/widgets/pattern_editor.py` / `editor_panel.py` — efficient custom-rendered editor and controls
-- `app/models.py` — settings/palette models
-- `app/widgets/` — reusable UI
-- `tests/` — generated-image core tests
+- `app/version.py` — authoritative release identity
+- `app/main_window.py` — main UI and file-operation boundaries
+- `app/project_format.py` / `app/project_io.py` — project routing and persistence
+- `app/image_processor.py` / `app/pattern_converter.py` — source preparation and DMC conversion
+- `app/palette_system.py` / `palettes/dmc.json` — validated palette resources
+- `app/pattern_model.py` — logical grid and exact delta Undo/Redo
+- `app/pattern_analysis.py` — deterministic region/confetti analysis
+- `app/widgets/` — crop, editor, inventory, and image controls
+- `app/finished_preview.py` — cached Square/Round rendering
+- `app/exporter.py` / `app/pdf_exporter.py` — PNG and tiled symbolized PDF export
+- `app/logging_manager.py` — logs, crash hooks, timings, and session markers
+- `tests/` — regression coverage
 
-## Processing design
+## Palette data
 
-Adjustments are applied before Lanczos reduction to the exact drill grid. Pillow median-cut quantization follows, with optional Floyd–Steinberg dithering. This preserves detail while guaranteeing dimensions and color limits. Fit uses white letterboxing; Fill uses a centered crop.
-
-The logical drill grid is deterministically quantized into a broader candidate pool. Candidates are scored for drill coverage, CIELAB distinctiveness, spatial coherence, local contrast, and four-connected tiny-region/confetti burden. An iterative set optimizer selects distinct DMC colors, allowing a perceptually reasonable second-best DMC match when two useful candidates share the same nearest code. Every candidate region is then assigned through the selected DMC set. The final logical grid stores DMC codes, never arbitrary RGB values, and never exceeds the requested target.
-
-The 489-entry `DMC Reference Palette` was mechanically extracted from the open-source pyxstitch 1.11.1 floss table (`https://github.com/enckse/pyxstitch`, GPL-3.0). Its license is retained at `palettes/LICENSE-pyxstitch-GPL3.txt`. RGB values are screen-reference approximations, not official color-management data. Thread and resin drill appearance varies by display, lighting, material, dye lot, and manufacturer.
+The DMC palette was mechanically extracted from the open-source pyxstitch 1.11.1 floss table. Its GPL-3.0 license is retained at `palettes/LICENSE-pyxstitch-GPL3.txt`. RGB values are screen-reference approximations; physical appearance varies by display, lighting, material, dye lot, and manufacturer.
 
 ## Current limitations
 
-- Extreme 1000 × 1000 patterns and enlarged exports may be slower or memory-heavy.
-- Conversion is debounced but currently runs in the GUI process.
-- Exported grid lines replace one edge pixel of enlarged cells.
-- Printable PDF export runs synchronously and can briefly make the window appear busy on unusually large patterns.
-- DMC RGB matching uses Delta E 1976 rather than newer Delta E 2000.
-- Project files do not yet preserve undo history; reopening starts a fresh undo stack.
-- Automatic confetti cleanup is intentionally not implemented. The Pattern Editor's Confetti Inspector reports and highlights small suspect regions without changing them; replacement decisions remain manual.
+- Very large patterns and high-resolution PDF pages can be memory intensive.
+- Conversion, confetti analysis, and PDF export currently run synchronously in the GUI process.
+- The portable 1.0 folder build is not yet an installer and does not register file associations.

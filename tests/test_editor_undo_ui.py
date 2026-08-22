@@ -19,10 +19,13 @@ def make_panel():
     return app, panel, pattern
 
 
+def cell_point(canvas,x,y):return QPoint(round(canvas.offset.x()+(x+.5)*canvas.cell_size),round(canvas.offset.y()+(y+.5)*canvas.cell_size))
+
+
 def test_pencil_click_enables_undo_on_mouse_release_and_shortcuts_work():
     app, panel, pattern = make_panel(); canvas = panel.canvas
     assert not panel.undo.isEnabled()
-    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=QPoint(25, 25)); app.processEvents()
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=cell_point(canvas,0,0)); app.processEvents()
     assert pattern.get(0, 0) == "B" and panel.undo.isEnabled() and panel.undo_stack.count == 1
     canvas.setFocus(); QTest.keyClick(canvas, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier); app.processEvents()
     assert pattern.get(0, 0) == "A" and panel.redo.isEnabled()
@@ -33,8 +36,8 @@ def test_pencil_click_enables_undo_on_mouse_release_and_shortcuts_work():
 
 def test_drag_commits_once_and_non_editing_actions_keep_history():
     app, panel, pattern = make_panel(); canvas = panel.canvas
-    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=QPoint(25, 25))
-    QTest.mouseMove(canvas, QPoint(65, 25)); QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=QPoint(65, 25)); app.processEvents()
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=cell_point(canvas,0,0))
+    QTest.mouseMove(canvas, cell_point(canvas,4,0)); QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=cell_point(canvas,4,0)); app.processEvents()
     assert panel.undo_stack.count == 1 and panel.undo.isEnabled()
     panel.select_code("A"); panel.highlight.setChecked(True); canvas.cell_size += 1; canvas.update(); app.processEvents()
     assert panel.undo_stack.count == 1 and panel.undo.isEnabled()
@@ -46,14 +49,14 @@ def test_drag_commits_once_and_non_editing_actions_keep_history():
 def test_flood_fill_and_sequential_actions_follow_history_order():
     app, panel, pattern = make_panel(); canvas = panel.canvas
     panel.select_tool("Flood Fill")
-    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=QPoint(25, 25)); app.processEvents()
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=cell_point(canvas,0,0)); app.processEvents()
     assert all(code == "B" for code in pattern.cell_ids) and panel.undo_stack.count == 1
     canvas.setFocus(); QTest.keyClick(canvas, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier); app.processEvents()
     assert all(code == "A" for code in pattern.cell_ids)
 
     panel.select_tool("Pencil")
-    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=QPoint(25, 25))
-    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=QPoint(35, 25)); app.processEvents()
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=cell_point(canvas,0,0))
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton, pos=cell_point(canvas,1,0)); app.processEvents()
     assert panel.undo_stack.count == 2 and pattern.get(0, 0) == pattern.get(1, 0) == "B"
     panel.undo.click(); assert pattern.get(0, 0) == "B" and pattern.get(1, 0) == "A"
     panel.undo.click(); assert pattern.get(0, 0) == pattern.get(1, 0) == "A"

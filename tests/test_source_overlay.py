@@ -30,6 +30,9 @@ def canvas_color(panel,x=5,y=5):
     image=panel.canvas.grab().toImage();return image.pixelColor(panel.canvas.offset.x()+x*panel.canvas.cell_size+panel.canvas.cell_size//2,panel.canvas.offset.y()+y*panel.canvas.cell_size+panel.canvas.cell_size//2)
 
 
+def cell_point(panel,x=0,y=0):return QPoint(round(panel.canvas.offset.x()+(x+.5)*panel.canvas.cell_size),round(panel.canvas.offset.y()+(y+.5)*panel.canvas.cell_size))
+
+
 def test_adjusted_crop_reference_preserves_alignment_and_detail():
     source=Image.new("RGB",(400,200));pixels=source.load()
     for y in range(200):
@@ -61,8 +64,8 @@ def test_overlay_controls_do_not_mutate_pattern_history_or_usage():
 
 def test_pencil_and_eyedropper_still_use_logical_cells_with_overlay():
     app,panel=panel_with_source(Image.new("RGB",(100,100),(0,0,255)));panel.show_source_overlay.setChecked(True);panel.canvas.selected_code="G"
-    QTest.mouseClick(panel.canvas,Qt.MouseButton.LeftButton,pos=QPoint(30,30));app.processEvents();assert panel.pattern.get(0,0)=="G"
-    panel.select_tool("Eyedropper");panel.canvas.selected_code="R";QTest.mouseClick(panel.canvas,Qt.MouseButton.LeftButton,pos=QPoint(30,30));app.processEvents();assert panel.canvas.selected_code=="G"
+    point=cell_point(panel);QTest.mouseClick(panel.canvas,Qt.MouseButton.LeftButton,pos=point);app.processEvents();assert panel.pattern.get(0,0)=="G"
+    panel.select_tool("Eyedropper");panel.canvas.selected_code="R";QTest.mouseClick(panel.canvas,Qt.MouseButton.LeftButton,pos=cell_point(panel));app.processEvents();assert panel.canvas.selected_code=="G"
     panel.show_source_overlay.setChecked(False);assert panel.pattern.get(0,0)=="G"
     panel.close()
 

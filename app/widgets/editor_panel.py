@@ -53,6 +53,7 @@ class EditorPanel(QWidget):
         self.copy_shortcut=QShortcut(QKeySequence.StandardKey.Copy,self.canvas);self.copy_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut);self.copy_shortcut.activated.connect(self._copy_selection)
         self.paste_shortcut=QShortcut(QKeySequence.StandardKey.Paste,self.canvas);self.paste_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut);self.paste_shortcut.activated.connect(self._paste_selection)
         self.delete_shortcut=QShortcut(QKeySequence(Qt.Key.Key_Delete),self.canvas);self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut);self.delete_shortcut.activated.connect(self._clear_selection_cells)
+        self.fit_pattern_shortcut=QShortcut(QKeySequence("Ctrl+0"),self);self.fit_pattern_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut);self.fit_pattern_shortcut.activated.connect(self.canvas.fit_pattern)
 
     def _build_global_replacement(self,side_layout):
         self.replacement_source_code=None;self.replacement_destination_code=None;self.replacement_group=QGroupBox("Replace Selected Used Color");panel=QVBoxLayout(self.replacement_group)
@@ -64,7 +65,6 @@ class EditorPanel(QWidget):
         self.replacement_owned_only=QCheckBox("Only Show Colors I Own");panel.addWidget(self.replacement_owned_only)
         self.replacement_candidates=QListWidget();self.replacement_candidates.setFixedHeight(142);panel.addWidget(self.replacement_candidates)
         self.replacement_destination=QLabel("Choose a destination color.");self.replacement_destination.setWordWrap(True);self.replacement_destination.setFixedHeight(self.replacement_destination.fontMetrics().lineSpacing()*3+4);self.replacement_destination.setAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignTop);panel.addWidget(self.replacement_destination)
-        self.replacement_warning=QLabel();self.replacement_warning.setWordWrap(True);self.replacement_warning.setStyleSheet("color: #d69a35;");self.replacement_warning.setFixedHeight(self.replacement_warning.fontMetrics().lineSpacing()*2+2);panel.addWidget(self.replacement_warning)
         self.replacement_preview=QCheckBox("Preview Replacement");self.replacement_preview.setChecked(True);self.replacement_preview.setToolTip("Preview every occurrence in the editor without changing the pattern or undo history.");panel.addWidget(self.replacement_preview)
         self.replacement_actions=QWidget();actions=QHBoxLayout(self.replacement_actions);actions.setContentsMargins(0,0,0,0);self.replacement_apply=QPushButton("Replace Drills");self.replacement_apply.setToolTip("Replaces every occurrence of the selected used DMC color in the current pattern.");self.replacement_cancel=QPushButton("Cancel");height=max(self.replacement_apply.sizeHint().height(),self.replacement_cancel.sizeHint().height());self.replacement_apply.setFixedHeight(height);self.replacement_cancel.setFixedHeight(height);self.replacement_apply.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed);self.replacement_cancel.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed);actions.addWidget(self.replacement_apply,1);actions.addWidget(self.replacement_cancel,1);self.replacement_actions.setFixedHeight(height);panel.addWidget(self.replacement_actions)
         self.replacement_group.hide();side_layout.addWidget(self.replacement_group)
@@ -162,7 +162,7 @@ class EditorPanel(QWidget):
     def _begin_global_replacement(self,code):
         if not self.pattern or code not in self.pattern.usage:return
         self.canvas.set_replacement_preview();self.replacement_source_code=code;self.replacement_destination_code=None;color=self.pattern.palette.by_code[code];count=self.pattern.usage[code];percentage=count/max(1,self.pattern.total_drills)
-        self._set_swatch(self.replacement_from_swatch,color.rgb);self.replacement_from.setText(f"From: DMC {code} - {color.name}");self.replacement_scope.setText(f"{count:,} drills ({percentage:.1%})\nReplaces every occurrence of this DMC color in the current pattern.");self.replacement_search.clear();self.replacement_owned_only.setChecked(False);self.replacement_destination.setText("Choose a destination color.");self.replacement_warning.clear();self.replacement_group.show();self._refresh_replacement_choices();self._update_replacement_controls()
+        self._set_swatch(self.replacement_from_swatch,color.rgb);self.replacement_from.setText(f"From: DMC {code} - {color.name}");self.replacement_scope.setText(f"{count:,} drills ({percentage:.1%})\nReplaces every occurrence of this DMC color in the current pattern.");self.replacement_search.clear();self.replacement_owned_only.setChecked(False);self.replacement_destination.setText("Choose a destination color.");self.replacement_group.show();self._refresh_replacement_choices();self._update_replacement_controls()
         if self.replacement_suggestions.count():self._select_replacement_code(self.replacement_suggestions.item(0).data(Qt.ItemDataRole.UserRole))
 
     def _replacement_codes(self):
@@ -189,7 +189,7 @@ class EditorPanel(QWidget):
             if code==current:self.replacement_candidates.setCurrentItem(item)
 
     def _replacement_filter_changed(self,*_):
-        if self.replacement_destination_code and self.replacement_owned_only.isChecked() and self.replacement_destination_code not in self.owned_codes:self.replacement_destination_code=None;self.canvas.set_replacement_preview();self.replacement_destination.setText("Choose a destination color.");self.replacement_warning.clear()
+        if self.replacement_destination_code and self.replacement_owned_only.isChecked() and self.replacement_destination_code not in self.owned_codes:self.replacement_destination_code=None;self.canvas.set_replacement_preview();self.replacement_destination.setText("Choose a destination color.")
         self._refresh_replacement_choices();self._update_replacement_controls()
 
     def _replacement_candidate_clicked(self,item):self._select_replacement_code(item.data(Qt.ItemDataRole.UserRole))
@@ -197,7 +197,7 @@ class EditorPanel(QWidget):
         if not self.replacement_source_code or code==self.replacement_source_code or code not in self.pattern.palette.by_code:return
         self.replacement_destination_code=code;color=self.pattern.palette.by_code[code];distance=self._replacement_distance(code);count=self.pattern.usage.get(self.replacement_source_code,0)
         self.replacement_destination.setText(f"To: DMC {code} - {color.name}\n{self.replacement_source_code} -> {code} | Delta E {distance:.1f}\n{count:,} drills will change")
-        self.replacement_warning.setText("This replacement is substantially different from the current color." if distance>=30 else "");self._update_replacement_controls();LOG.info("Replacement preview selected: DMC %s -> DMC %s",self.replacement_source_code,code)
+        self._update_replacement_controls();LOG.info("Replacement preview selected: DMC %s -> DMC %s",self.replacement_source_code,code)
 
     def _update_replacement_controls(self):
         count=self.pattern.usage.get(self.replacement_source_code,0) if self.pattern and self.replacement_source_code else 0;valid=bool(count and self.replacement_destination_code and self.replacement_destination_code!=self.replacement_source_code);self.replacement_apply.setEnabled(valid);self.replacement_apply.setText(f"Replace {count:,} Drills" if count else "Replace Drills");self._update_replacement_preview()

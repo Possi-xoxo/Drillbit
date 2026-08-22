@@ -13,7 +13,7 @@ import tempfile
 import threading
 import traceback
 
-from . import __version__
+from .version import APP_VERSION
 
 LOG_NAME="drillbit.log";FAULT_NAME="drillbit_fault.log";MARKER_NAME="session.running"
 MAX_LOG_BYTES=3*1024*1024;BACKUP_COUNT=7;RECENT_ACTION_LIMIT=75
@@ -82,7 +82,7 @@ def begin_session():
     try:marker.write_text(_session_started,encoding="utf-8")
     except OSError:log.exception("Could not write session marker")
     log.info("===== Drillbit session started =====")
-    log.info("Version=%s Python=%s OS=%s packaged=%s executable=%s CPUs=%s",__version__,platform.python_version(),platform.platform(),bool(getattr(sys,"frozen",False)),sys.executable,os.cpu_count())
+    log.info("Version=%s Python=%s OS=%s packaged=%s executable=%s CPUs=%s",APP_VERSION,platform.python_version(),platform.platform(),bool(getattr(sys,"frozen",False)),sys.executable,os.cpu_count())
     try:
         from PySide6 import __version__ as pyside_version
         from PySide6.QtCore import qVersion
@@ -145,6 +145,6 @@ def log_timing(operation,logger=None,level=logging.INFO,**context):
 
 
 def diagnostic_summary(**current):
-    values={"Drillbit version":__version__,"Operating system":platform.platform(),"Mode":"Packaged" if getattr(sys,"frozen",False) else "Source",
+    values={"Drillbit version":APP_VERSION,"Operating system":platform.platform(),"Mode":"Packaged" if getattr(sys,"frozen",False) else "Source",
             "Current log":str(get_log_path()),"Session started":_session_started or "Not started",**current}
     return "\n".join(f"{key}: {value}" for key,value in values.items())

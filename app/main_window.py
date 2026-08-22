@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 from PIL import Image, ImageDraw
-from PySide6.QtCore import QStandardPaths, Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
@@ -15,6 +15,8 @@ from .models import ConversionSettings, DitherMode, FitMode
 from .palette_system import load_dmc_palette
 from .pattern_converter import convert_to_pattern
 from .project_io import load_project, save_project
+from .project_format import (PRIMARY_PROJECT_EXTENSION,PROJECT_OPEN_FILTER,PROJECT_SAVE_FILTER,
+    is_legacy_project_path,is_project_path)
 from .physical import Orientation, calculate_page_layout, drills_from_physical, finished_size_mm, mm_to_inches
 from .single_instance import SUPPORTED_FILE_SUFFIXES,select_incoming_file
 from .widgets.crop_view import CropView
@@ -23,6 +25,7 @@ from .widgets.image_view import ImageView
 from .widgets.inventory_dialog import InventoryDialog
 from .finished_preview import FinishedPreviewPanel
 from .logging_manager import diagnostic_summary,get_log_directory,get_log_path,record_action,set_diagnostic_context
+from .version import APP_NAME,about_text
 
 LOG = logging.getLogger(__name__)
 
@@ -82,7 +85,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.source = self.logical = self.pattern = self.source_path = None; self._changing = False; self._syncing_physical = False
         self.palette=load_dmc_palette();self.inventory=OwnedColorInventory(self.palette);self.project_path=None;self.dirty=False;self.manual_edits=False
-        self.setWindowTitle("Diamond Art Converter"); self.resize(1320, 820); self.setAcceptDrops(True)
+        self.setWindowTitle("Drillbit"); self.resize(1320, 820); self.setAcceptDrops(True)
         self._build_ui(); self._connect()
         self.timer = QTimer(self); self.timer.setSingleShot(True); self.timer.setInterval(180); self.timer.timeout.connect(self.refresh_preview)
         self._update_stats()
@@ -90,9 +93,10 @@ class MainWindow(QMainWindow):
         if self.inventory.load_error:QTimer.singleShot(0,lambda:QMessageBox.warning(self,"Colors I Own","The owned-color inventory could not be read. Drillbit preserved the file and started with an empty inventory. See Diagnostics for details."))
 
     def _build_ui(self):
-        diagnostics=self.menuBar().addMenu("Help").addMenu("Diagnostics")
+        help_menu=self.menuBar().addMenu("Help");diagnostics=help_menu.addMenu("Diagnostics")
         self.open_log_folder_action=QAction("Open Log Folder",self);self.open_latest_log_action=QAction("Open Latest Log",self);self.copy_diagnostic_action=QAction("Copy Diagnostic Summary",self)
         diagnostics.addActions((self.open_log_folder_action,self.open_latest_log_action,self.copy_diagnostic_action))
+        help_menu.addSeparator();self.about_action=QAction(f"About {APP_NAME}",self);help_menu.addAction(self.about_action)
         root = QWidget(); outer = QVBoxLayout(root); toolbar = QHBoxLayout()
         self.open_button = QPushButton("Open Image…"); self.export_button = QPushButton("Export Image PNG…"); self.export_button.setEnabled(False)
         self.print_button = QPushButton("Print Pattern PDF…"); self.print_button.setEnabled(False)
@@ -105,7 +109,7 @@ class MainWindow(QMainWindow):
         original_panel=QWidget(); original_layout=QVBoxLayout(original_panel); original_heading=QLabel("Crop & Reposition"); original_heading.setObjectName("panelHeading")
         self.original_view = CropView(); original_hint=QLabel("Drag to reposition. Use the mouse wheel to zoom."); original_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         original_layout.addWidget(original_heading); original_layout.addWidget(self.original_view,1); original_layout.addWidget(original_hint)
-        self.preview_view = ImageView("Diamond-Art Preview", "Your converted pattern will appear here")
+        self.preview_view = ImageView("Pattern Preview", "Your converted pattern will appear here")
         picture_layout.addWidget(original_panel, 1); picture_layout.addWidget(self.preview_view, 1)
         self.editor=EditorPanel();self.finished_preview=FinishedPreviewPanel();self.tabs=QTabWidget();self.tabs.addTab(pictures,"1. Image & Convert");self.tabs.addTab(self.editor,"2. Edit Pattern");self.tabs.addTab(self.finished_preview,"3. Finished Preview");splitter.addWidget(self.tabs)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setMinimumWidth(330); settings = QWidget(); form = QFormLayout(settings)
@@ -147,8 +151,9 @@ class MainWindow(QMainWindow):
     def _connect(self):
         self.open_button.clicked.connect(self.open_image_dialog); self.export_button.clicked.connect(self.export_dialog)
         self.open_log_folder_action.triggered.connect(self._open_log_folder);self.open_latest_log_action.triggered.connect(self._open_latest_log);self.copy_diagnostic_action.triggered.connect(self._copy_diagnostic_summary)
+        self.about_action.triggered.connect(self._show_about)
         self.print_button.clicked.connect(self.print_pdf_dialog)
-        self.finished_preview_button.clicked.connect(self._open_finished_preview);self.tabs.currentChanged.connect(self._tab_changed);self.finished_preview.preferenceChanged.connect(self._finished_preference_changed);self.drill_shape.currentTextChanged.connect(self._drill_shape_changed)
+        self.finished_preview_button.clicked.connect(self._open_finished_preview);self.tabs.currentChanged.connect(self._tab_changed);self.drill_shape.currentTextChanged.connect(self._drill_shape_changed)
         self.open_project_button.clicked.connect(self.open_project_dialog);self.save_project_button.clicked.connect(self.save_current_project);self.save_project_as_button.clicked.connect(lambda:self.save_current_project(True))
         self.regenerate_button.clicked.connect(self.regenerate_pattern);self.editor.changed.connect(self._editor_changed)
         self.reset_button.clicked.connect(self.reset_all); self.reset_adjustments.clicked.connect(self._reset_adjustments)
@@ -165,7 +170,9 @@ class MainWindow(QMainWindow):
         self.show_grid.toggled.connect(self._render_preview)
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls() and len(event.mimeData().urls()) == 1: event.acceptProposedAction()
+        if event.mimeData().hasUrls() and len(event.mimeData().urls())==1:
+            suffix=Path(event.mimeData().urls()[0].toLocalFile()).suffix.lower()
+            if suffix in SUPPORTED_FILE_SUFFIXES:event.acceptProposedAction()
 
     def dropEvent(self, event):
         if self._confirm_discard():self.load_path(event.mimeData().urls()[0].toLocalFile())
@@ -176,6 +183,7 @@ class MainWindow(QMainWindow):
         if path: self.load_path(path)
 
     def load_path(self, path):
+        if is_project_path(path):return self.load_project_path(path)
         try:
             record_action("Opening image")
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor); self.source = load_image(path); self.source_path = Path(path)
@@ -240,9 +248,6 @@ class MainWindow(QMainWindow):
     def _drill_shape_changed(self,shape):
         if not self.pattern:return
         self.pattern.metadata["drill_shape"]=shape;self._sync_finished_preview();self.dirty=True;self._update_title();LOG.info("Drill shape changed to %s",shape)
-
-    def _finished_preference_changed(self):
-        if self.pattern:self.dirty=True;self._update_title()
 
     def _show_palette(self, palette):
         self.palette_list.clear()
@@ -374,18 +379,24 @@ class MainWindow(QMainWindow):
     def save_current_project(self,save_as=False):
         if self.pattern is None:QMessageBox.information(self,"Nothing to Save","Open an image and create a pattern first.");return False
         path=self.project_path
+        if path and is_legacy_project_path(path) and not save_as:
+            answer=QMessageBox.question(self,"Legacy Drillbit Project","This project uses the legacy .diamond format.\n\nIt will be saved as a new .drillbit project, leaving the original .diamond file unchanged.",QMessageBox.StandardButton.Save|QMessageBox.StandardButton.Cancel)
+            if answer!=QMessageBox.StandardButton.Save:return False
+            save_as=True
         if save_as or not path:
-            name=f"{self.source_path.stem}.diamond" if self.source_path else "diamond_art_project.diamond"
-            path,_=QFileDialog.getSaveFileName(self,"Save Diamond Art Project",name,"Diamond Art Project (*.diamond)")
+            stem=path.stem if path else self.source_path.stem if self.source_path else "drillbit_project";name=f"{stem}{PRIMARY_PROJECT_EXTENSION}"
+            path,_=QFileDialog.getSaveFileName(self,"Save Drillbit Project",name,PROJECT_SAVE_FILTER)
             if not path:return False
         try:
-            self.project_path=save_project(path,self.pattern,self.source,self._project_settings(),{"selected_code":self.editor.canvas.selected_code,**self.editor.source_overlay_state()});LOG.info("Project saved");record_action("Project saved")
+            legacy_source=self.project_path if self.project_path and is_legacy_project_path(self.project_path) else None;self.project_path=save_project(path,self.pattern,self.source,self._project_settings(),{"selected_code":self.editor.canvas.selected_code,**self.editor.source_overlay_state()});LOG.info("Drillbit project saved: %s",self.project_path)
+            if legacy_source:LOG.info("Migrated legacy project to .drillbit; original preserved: %s",legacy_source)
+            record_action("Project saved")
             self.dirty=False;self._update_title();self.statusBar().showMessage(f"Saved {self.project_path.name}");return True
         except Exception as exc:LOG.exception("Project save failed");QMessageBox.critical(self,"Save Failed",str(exc));return False
 
     def open_project_dialog(self):
         if not self._confirm_discard():return
-        path,_=QFileDialog.getOpenFileName(self,"Open Diamond Art Project","","Diamond Art Project (*.diamond)")
+        path,_=QFileDialog.getOpenFileName(self,"Open Drillbit Project","",PROJECT_OPEN_FILTER)
         if not path:return
         self.load_project_path(path)
 
@@ -401,7 +412,7 @@ class MainWindow(QMainWindow):
             else:LOG.debug("Overlay source unavailable")
             self.logical=pattern.to_image();self.editor.set_pattern(pattern,reference,editor_state);self.editor.select_code(editor_state.get("selected_code",next(iter(pattern.usage),None)));self._sync_finished_preview(settings)
             self._render_preview();self._show_palette(pattern.used_colors());self.export_button.setEnabled(True);self.print_button.setEnabled(True);self.finished_preview_button.setEnabled(True);self.manual_edits=True;self.dirty=False;self._update_stats();self._update_title();self.tabs.setCurrentIndex(1)
-            LOG.info("Project opened pattern=%sx%s colors=%s",pattern.width,pattern.height,len(pattern.usage));record_action("Project opened")
+            LOG.info("%s opened: %s pattern=%sx%s colors=%s","Legacy .diamond project" if is_legacy_project_path(path) else "Drillbit project",path,pattern.width,pattern.height,len(pattern.usage));record_action("Project opened")
         except Exception as exc:LOG.exception("Project open failed");QMessageBox.critical(self,"Open Project Failed",str(exc))
 
     def activate_existing_window(self):
@@ -421,7 +432,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self,"Could Not Open File","No supported existing Drillbit file was provided.");return
         if len(files)>1:LOG.info("Multiple incoming files received; opening the first supported file only")
         if not self._confirm_discard():return
-        if selected.suffix.lower()==".diamond":self.load_project_path(selected)
+        if is_project_path(selected):self.load_project_path(selected)
         else:self.load_path(selected)
 
     def _apply_project_settings(self,data):
@@ -439,7 +450,7 @@ class MainWindow(QMainWindow):
 
     def _update_title(self):
         name=self.project_path.name if self.project_path else (self.source_path.name if self.source_path else "Untitled")
-        self.setWindowTitle(f"Diamond Art Converter - {name}{' *' if self.dirty else ''}")
+        self.setWindowTitle(f"Drillbit - {name}{' *' if self.dirty else ''}")
 
     def closeEvent(self,event):
         if self._confirm_discard():LOG.info("Project close accepted");record_action("Application close accepted");event.accept()
@@ -450,6 +461,8 @@ class MainWindow(QMainWindow):
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(get_log_directory()))):QMessageBox.warning(self,"Diagnostics","The log folder could not be opened.")
     def _open_latest_log(self):
         if not get_log_path().exists() or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(get_log_path()))):QMessageBox.warning(self,"Diagnostics","The latest log could not be opened.")
+    def _show_about(self):QMessageBox.about(self,f"About {APP_NAME}",about_text())
     def _copy_diagnostic_summary(self):
-        current={"Pattern":f"{self.pattern.width} x {self.pattern.height}" if self.pattern else "None","Maximum colors":self.colors.currentText(),"Colors used":len(self.pattern.usage) if self.pattern else 0,"Transparency":self.preserve_transparency.isChecked(),"Owned Color Inventory":str(self.inventory.path),"Owned colors":len(self.inventory.owned)}
+        project_format="Legacy .diamond" if self.project_path and is_legacy_project_path(self.project_path) else "Native .drillbit" if self.project_path else "Unsaved"
+        current={"Pattern":f"{self.pattern.width} x {self.pattern.height}" if self.pattern else "None","Project format":project_format,"Maximum colors":self.colors.currentText(),"Colors used":len(self.pattern.usage) if self.pattern else 0,"Transparency":self.preserve_transparency.isChecked(),"Owned Color Inventory":str(self.inventory.path),"Owned colors":len(self.inventory.owned)}
         QApplication.clipboard().setText(diagnostic_summary(**current));self.statusBar().showMessage("Diagnostic summary copied")

@@ -1,2 +1,4 @@
-"""Diamond Art Converter application package."""
-__version__ = "1.5.0"
+"""Drillbit application package."""
+from .version import APP_VERSION
+
+__version__=APP_VERSION
