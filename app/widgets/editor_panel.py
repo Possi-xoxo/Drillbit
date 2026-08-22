@@ -1,7 +1,7 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication,QButtonGroup,QCheckBox,QComboBox,QDialog,QDialogButtonBox,QGroupBox,QHBoxLayout,QLabel,QLineEdit,QListWidget,QListWidgetItem,
-    QMessageBox,QPushButton,QSizePolicy,QSplitter,QToolButton,QVBoxLayout,QWidget)
+    QMessageBox,QPushButton,QSizePolicy,QSlider,QSplitter,QToolButton,QVBoxLayout,QWidget)
 import logging
 from .pattern_editor import PatternCanvas
 from ..pattern_analysis import analyze_confetti,region_summary
@@ -36,6 +36,7 @@ class EditorPanel(QWidget):
         self.used_heading=QLabel("Used Colors");self.palette_heading=QLabel("DMC Palette");self.analysis=QLabel()
         side_layout.addWidget(self.selected);side_layout.addWidget(self.inspector);side_layout.addWidget(self.used_heading);side_layout.addWidget(self.used_list,3);side_layout.addWidget(self.replace)
         side_layout.addWidget(self.palette_heading);side_layout.addWidget(self.search);side_layout.addWidget(self.palette_list,1);side_layout.addWidget(self.analysis)
+        self._build_source_overlay_controls(side_layout)
         self._build_selection_controls(side_layout)
         self._build_confetti_inspector(side_layout)
         split.addWidget(side);split.setStretchFactor(0,1);layout.addWidget(split,1)
@@ -51,6 +52,19 @@ class EditorPanel(QWidget):
         self.copy_shortcut=QShortcut(QKeySequence.StandardKey.Copy,self.canvas);self.copy_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut);self.copy_shortcut.activated.connect(self._copy_selection)
         self.paste_shortcut=QShortcut(QKeySequence.StandardKey.Paste,self.canvas);self.paste_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut);self.paste_shortcut.activated.connect(self._paste_selection)
         self.delete_shortcut=QShortcut(QKeySequence(Qt.Key.Key_Delete),self.canvas);self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetShortcut);self.delete_shortcut.activated.connect(self._clear_selection_cells)
+
+    def _build_source_overlay_controls(self,side_layout):
+        self.reference_group=QGroupBox("Reference");box=QVBoxLayout(self.reference_group);self.show_source_overlay=QCheckBox("Show Source Overlay");self.show_source_overlay.setToolTip("Source image is not available for this project.");box.addWidget(self.show_source_overlay)
+        self.source_opacity_row=QWidget();row=QHBoxLayout(self.source_opacity_row);row.setContentsMargins(0,0,0,0);row.addWidget(QLabel("Source Opacity"));self.source_opacity=QSlider(Qt.Orientation.Horizontal);self.source_opacity.setRange(0,100);self.source_opacity.setValue(40);self.source_opacity_value=QLabel("40%");row.addWidget(self.source_opacity,1);row.addWidget(self.source_opacity_value);box.addWidget(self.source_opacity_row);self.source_opacity_row.hide();side_layout.addWidget(self.reference_group)
+        self.show_source_overlay.toggled.connect(self._toggle_source_overlay);self.source_opacity.valueChanged.connect(self._source_opacity_changed)
+
+    def _toggle_source_overlay(self,enabled):
+        active=bool(enabled and self.canvas.source_reference_available);self.canvas.show_source_overlay=active;self.source_opacity_row.setVisible(active);self.canvas.update();LOG.debug("Source overlay %s","enabled" if active else "disabled")
+
+    def _source_opacity_changed(self,value):
+        self.source_opacity_value.setText(f"{value}%");self.canvas.source_overlay_opacity=value/100;self.canvas.update()
+
+    def source_overlay_state(self):return {"show_source_overlay":self.show_source_overlay.isChecked(),"source_overlay_opacity":self.source_opacity.value()}
 
     def _build_selection_controls(self,side_layout):
         self.selection_group=QGroupBox("Selection");box=QVBoxLayout(self.selection_group);self.selection_status=QLabel();self.selection_status.setWordWrap(True);box.addWidget(self.selection_status)
@@ -70,8 +84,9 @@ class EditorPanel(QWidget):
         self.inspect_confetti.toggled.connect(self._set_confetti_mode);self.highlight_confetti.toggled.connect(self._toggle_confetti_overlay);self.confetti_filter.currentIndexChanged.connect(lambda *_:self._refresh_confetti_list());self.confetti_sort.currentIndexChanged.connect(lambda *_:self._refresh_confetti_list())
         self.confetti_list.currentItemChanged.connect(self._confetti_item_changed);self.confetti_previous.clicked.connect(lambda:self._navigate_confetti(-1));self.confetti_next.clicked.connect(lambda:self._navigate_confetti(1))
 
-    def set_pattern(self,pattern):
-        self.inspect_confetti.setChecked(False);self.pattern=pattern;self.confetti_analysis=None;self._confetti_selected_id=None;self.undo_stack=UndoStack();self.undo_stack.add_listener(self._history_changed);self.canvas.set_pattern(pattern,self.undo_stack);self.canvas.allow_selection_move=pattern.supports_transparency;self.canvas.set_confetti_analysis(None);self.canvas.set_inspection_mode(False);self.highlight_confetti.setChecked(True);self.confetti_status.setText("Activate the inspector to analyze suspicious small regions.");self.confetti_list.clear();self.confetti_details.setText("Select a suspect region to inspect it.");self.tool_buttons["Eraser"].setEnabled(pattern.supports_transparency);self.select_tool("Pencil");self._populate_palette();self._refresh_used();self._selection_changed(None)
+    def set_pattern(self,pattern,source_reference=None,overlay_state=None):
+        self.inspect_confetti.setChecked(False);self.pattern=pattern;self.confetti_analysis=None;self._confetti_selected_id=None;self.undo_stack=UndoStack();self.undo_stack.add_listener(self._history_changed);self.canvas.set_pattern(pattern,self.undo_stack);self.canvas.set_source_reference(source_reference);self.canvas.allow_selection_move=pattern.supports_transparency;self.canvas.set_confetti_analysis(None);self.canvas.set_inspection_mode(False);self.highlight_confetti.setChecked(True);self.confetti_status.setText("Activate the inspector to analyze suspicious small regions.");self.confetti_list.clear();self.confetti_details.setText("Select a suspect region to inspect it.");self.tool_buttons["Eraser"].setEnabled(pattern.supports_transparency);self.select_tool("Pencil");self._populate_palette();self._refresh_used();self._selection_changed(None)
+        state=overlay_state or {};opacity=max(0,min(100,int(state.get("source_overlay_opacity",40))));self.source_opacity.setValue(opacity);available=self.canvas.source_reference_available;self.show_source_overlay.setEnabled(available);self.show_source_overlay.setToolTip("Blend the adjusted cropped source over the logical pattern." if available else "Source image is not available for this project.");self.show_source_overlay.setChecked(available and bool(state.get("show_source_overlay",False)));self._toggle_source_overlay(self.show_source_overlay.isChecked())
         if pattern.usage:self.select_code(next(iter(pattern.usage)))
 
     def set_owned_codes(self,codes):self.owned_codes=set(codes);self._populate_palette()

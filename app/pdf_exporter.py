@@ -1,4 +1,5 @@
 from io import BytesIO
+from functools import lru_cache
 import os
 from pathlib import Path
 from time import perf_counter
@@ -14,6 +15,7 @@ import logging
 from .image_processor import palette_statistics
 from .physical import Orientation, calculate_page_layout, finished_size_mm, mm_to_inches, tile_ranges
 from .symbols import ensure_pattern_symbols, symbol_text_rgb
+from .finished_preview import ROUND_DRILL_DIAMETER_RATIO,ROUND_SYMBOL_SCALE
 
 LOG=logging.getLogger(__name__)
 CHART_RASTER_DPI=600
@@ -24,7 +26,7 @@ def _page_size(layout):
 
 def export_pattern_pdf(logical, destination, drill_mm=2.5, orientation=Orientation.AUTO,
                        margin_in=0.25, overlap_in=0.25,include_symbols=True,include_legend=True,
-                       raster_dpi=CHART_RASTER_DPI):
+                       raster_dpi=CHART_RASTER_DPI,drill_shape="Square"):
     export_started=perf_counter()
     path = Path(destination)
     if path.suffix.lower() != ".pdf": path = path.with_suffix(".pdf")
@@ -35,27 +37,27 @@ def export_pattern_pdf(logical, destination, drill_mm=2.5, orientation=Orientati
     palette = pattern.used_colors() if pattern is not None else palette_statistics(logical); width_mm, height_mm = finished_size_mm(logical.width, logical.height, drill_mm)
     symbols=ensure_pattern_symbols(pattern) if pattern is not None else {};LOG.info("Assigned %s printable symbols",len(symbols))
     drills=pattern.total_drills if pattern is not None else sum(1 for pixel in logical.get_flattened_data() if len(pixel)<4 or pixel[3]>0)
-    LOG.info("PDF export started: pattern=%sx%s drills=%s colors=%s chart_pages=%s symbols=%s raster_dpi=%s",
-             logical.width,logical.height,drills,len(palette),layout.tile_count,include_symbols,raster_dpi)
+    LOG.info("PDF export started: pattern=%sx%s drills=%s colors=%s chart_pages=%s symbols=%s raster_dpi=%s drill_shape=%s",
+             logical.width,logical.height,drills,len(palette),layout.tile_count,include_symbols,raster_dpi,drill_shape)
     if include_legend:
-        legend_started=perf_counter();legend_pages=_draw_legend_pages(canvas,page_size,logical,palette,drill_mm,width_mm,height_mm,layout,symbols);LOG.info("Legend pages: %s generated in %.2f s",legend_pages,perf_counter()-legend_started)
+        legend_started=perf_counter();legend_pages=_draw_legend_pages(canvas,page_size,logical,palette,drill_mm,width_mm,height_mm,layout,symbols,drill_shape);LOG.info("Legend pages: %s generated in %.2f s",legend_pages,perf_counter()-legend_started)
     total = layout.tile_count
     LOG.info("Rendering %s chart pages symbols=%s",total,include_symbols)
     for number, (row, col, bounds) in enumerate(tile_ranges(logical.width, logical.height, layout), start=1):
-        _draw_tile(canvas, page_size, logical, drill_mm, margin_in, bounds, number, total, row, col, pattern,symbols if include_symbols else {},raster_dpi)
+        _draw_tile(canvas, page_size, logical, drill_mm, margin_in, bounds, number, total, row, col, pattern,symbols if include_symbols else {},raster_dpi,drill_shape)
         canvas.showPage()
     save_started=perf_counter();canvas.save();LOG.info("Final PDF save completed in %.2f s",perf_counter()-save_started)
     LOG.info("PDF export completed in %.2f s: %s",perf_counter()-export_started,path)
     return path, layout
 
-def _draw_legend_pages(c,page_size,logical,palette,drill_mm,width_mm,height_mm,layout,symbols):
+def _draw_legend_pages(c,page_size,logical,palette,drill_mm,width_mm,height_mm,layout,symbols,drill_shape="Square"):
     ordered=sorted(palette,key=lambda item:list(symbols).index(item[0].code)) if symbols else list(palette);page=0;offset=0
     while offset<len(ordered) or page==0:
         page+=1;page_w,page_h=page_size;c.setFillColor(black);c.setFont("Helvetica-Bold",18);c.drawString(.55*inch,page_h-.55*inch,f"Diamond Art Pattern - Legend {page}")
         if page==1:
             drills=sum(1 for pixel in logical.get_flattened_data() if len(pixel)<4 or pixel[3]>0);empty=logical.width*logical.height-drills;c.setFont("Helvetica",9)
             lines=[f"Pattern grid: {logical.width} x {logical.height} cells",f"Total drills: {drills:,}    Empty cells: {empty:,}    Colors: {len(palette)}",
-                   f"Drill size: {drill_mm:g} mm    Finished size: {width_mm:g} x {height_mm:g} mm ({mm_to_inches(width_mm):.2f} x {mm_to_inches(height_mm):.2f} in)",
+                   f"Drill Pitch: {drill_mm:g} mm    Drill Shape: {drill_shape}",f"Finished size: {width_mm:g} x {height_mm:g} mm ({mm_to_inches(width_mm):.2f} x {mm_to_inches(height_mm):.2f} in)",
                    f"Chart pages: {layout.tile_count}    Orientation: {layout.orientation.value}","Print at 100% / Actual Size. Do not use Fit to Page."]
             y=page_h-.85*inch
             for line in lines:c.drawString(.55*inch,y,line);y-=.17*inch
@@ -119,18 +121,33 @@ def _symbol_stamp(symbol,text_rgb,font):
     width=max(1,bbox[2]-bbox[0]);height=max(1,bbox[3]-bbox[1]);stamp=Image.new("RGBA",(width,height),(0,0,0,0));draw=ImageDraw.Draw(stamp)
     draw.text((-bbox[0],-bbox[1]),symbol,font=font,fill=(*text_rgb,255));return stamp
 
+@lru_cache(maxsize=32)
+def _round_cell_mask(width,height):
+    scale=4;mask=Image.new("L",(width*scale,height*scale),0);draw=ImageDraw.Draw(mask);diameter=min(width,height)*scale*ROUND_DRILL_DIAMETER_RATIO;left=(width*scale-diameter)/2;top=(height*scale-diameter)/2
+    draw.ellipse((left,top,left+diameter,top+diameter),fill=255);return mask.resize((width,height),Image.Resampling.LANCZOS)
 
-def render_chart_tile(logical,bounds,drill_mm,pattern=None,symbols=None,dpi=CHART_RASTER_DPI):
+
+def render_chart_tile(logical,bounds,drill_mm,pattern=None,symbols=None,dpi=CHART_RASTER_DPI,drill_shape="Square"):
     """Render one logical tile to pixels; PDF placement remains authoritative for scale."""
     x0,y0,x1,y1=bounds;cells_x=x1-x0;cells_y=y1-y0
-    pixel_w=max(1,round(cells_x*drill_mm/25.4*dpi));pixel_h=max(1,round(cells_y*drill_mm/25.4*dpi))
+    pixels_per_cell=drill_mm/25.4*dpi;x_origin=round(x0*pixels_per_cell);y_origin=round(y0*pixels_per_cell);x_edges=[round((x0+index)*pixels_per_cell)-x_origin for index in range(cells_x+1)];y_edges=[round((y0+index)*pixels_per_cell)-y_origin for index in range(cells_y+1)];pixel_w=max(1,x_edges[-1]);pixel_h=max(1,y_edges[-1])
     source=np.asarray(logical)
     tile=source[y0:y1,x0:x1]
     if tile.ndim==2:tile=np.repeat(tile[...,None],3,axis=2)
     rgb=np.asarray(tile[...,:3],dtype=np.uint8).copy()
     if tile.shape[2]>=4:rgb[np.asarray(tile[...,3])==0]=(255,255,255)
-    raster=Image.fromarray(rgb,"RGB").resize((pixel_w,pixel_h),Image.Resampling.NEAREST)
-    x_edges=[round(index*pixel_w/cells_x) for index in range(cells_x+1)];y_edges=[round(index*pixel_h/cells_y) for index in range(cells_y+1)]
+    if drill_shape=="Square":raster=Image.fromarray(rgb,"RGB").resize((pixel_w,pixel_h),Image.Resampling.NEAREST)
+    elif drill_shape=="Round":
+        raster=Image.new("RGB",(pixel_w,pixel_h),"white");swatches={}
+        for local_y,gy in enumerate(range(y0,y1)):
+            for local_x,gx in enumerate(range(x0,x1)):
+                if pattern is not None:
+                    if pattern.get(gx,gy) is None:continue
+                elif tile.shape[2]>=4 and tile[local_y,local_x,3]==0:continue
+                left,top=x_edges[local_x],y_edges[local_y];width=x_edges[local_x+1]-left;height=y_edges[local_y+1]-top;color=tuple(int(value) for value in rgb[local_y,local_x]);key=(width,height,color);swatch=swatches.get(key)
+                if swatch is None:swatch=swatches[key]=Image.new("RGB",(width,height),color)
+                raster.paste(swatch,(left,top),_round_cell_mask(width,height))
+    else:raise ValueError("Drill shape must be Square or Round.")
     symbols=symbols or {};symbol_started=perf_counter();symbol_count=0
     if pattern is not None and symbols:
         draw_cache={};font_cache={}
@@ -141,7 +158,7 @@ def render_chart_tile(logical,bounds,drill_mm,pattern=None,symbols=None,dpi=CHAR
                 symbol=symbols.get(code)
                 if not symbol:continue
                 cell_w=x_edges[local_x+1]-x_edges[local_x];cell_h=y_edges[local_y+1]-y_edges[local_y]
-                font_px=max(6,round(min(cell_w,cell_h)*(.62 if len(symbol)==1 else .43)))
+                shape_scale=ROUND_SYMBOL_SCALE if drill_shape=="Round" else 1.0;font_px=max(6,round(min(cell_w,cell_h)*(.62 if len(symbol)==1 else .43)*shape_scale))
                 font=font_cache.setdefault(font_px,_symbol_font(font_px));text_rgb=symbol_text_rgb(tuple(int(v) for v in rgb[local_y,local_x]))
                 key=(symbol,text_rgb,font_px);stamp=draw_cache.get(key)
                 if stamp is None:stamp=draw_cache[key]=_symbol_stamp(symbol,text_rgb,font)
@@ -156,10 +173,10 @@ def render_chart_tile(logical,bounds,drill_mm,pattern=None,symbols=None,dpi=CHAR
     return raster,{"width":pixel_w,"height":pixel_h,"bytes":pixel_w*pixel_h*3,"symbols":symbol_count,"symbol_seconds":symbol_seconds}
 
 
-def _draw_tile(c, page_size, logical, drill_mm, margin_in, bounds, number, total, row, col, pattern=None,symbols=None,raster_dpi=CHART_RASTER_DPI):
+def _draw_tile(c, page_size, logical, drill_mm, margin_in, bounds, number, total, row, col, pattern=None,symbols=None,raster_dpi=CHART_RASTER_DPI,drill_shape="Square"):
     page_w, page_h = page_size; x0, y0, x1, y1 = bounds; pitch = drill_mm*mm
     origin_x = margin_in*inch; origin_y = page_h-margin_in*inch-(y1-y0)*pitch
-    raster_started=perf_counter();raster,stats=render_chart_tile(logical,bounds,drill_mm,pattern,symbols,raster_dpi)
+    raster_started=perf_counter();raster,stats=render_chart_tile(logical,bounds,drill_mm,pattern,symbols,raster_dpi,drill_shape)
     LOG.info("Rasterized tile %s/%s in %.2f s (%sx%s px, %.1f MiB, %s symbols in %.2f s)",number,total,perf_counter()-raster_started,stats["width"],stats["height"],stats["bytes"]/(1024*1024),stats["symbols"],stats["symbol_seconds"])
     encode_started=perf_counter();encoded=BytesIO();raster.save(encoded,format="PNG",optimize=False);encoded.seek(0);encoded_size=encoded.getbuffer().nbytes
     LOG.info("Encoded tile %s/%s losslessly in %.2f s (%.1f MiB PNG)",number,total,perf_counter()-encode_started,encoded_size/(1024*1024))

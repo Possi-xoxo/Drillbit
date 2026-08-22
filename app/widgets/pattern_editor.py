@@ -14,7 +14,7 @@ class PatternCanvas(QWidget):
 
     def __init__(self,parent=None):
         super().__init__(parent);self.pattern=None;self.undo_stack=None;self.selected_code=None;self.tool="Pencil"
-        self.cell_size=10;self.offset=QPoint(20,20);self.highlight=False;self.show_initial=False;self._image=QImage();self._stroke=[];self._painting=False;self._pan=None;self._last_cell=None
+        self.cell_size=10;self.offset=QPoint(20,20);self.highlight=False;self.show_initial=False;self._image=QImage();self._source_reference=QImage();self.show_source_overlay=False;self.source_overlay_opacity=.4;self._stroke=[];self._painting=False;self._pan=None;self._last_cell=None
         self.confetti_analysis=None;self.confetti_confidences={"High"};self.confetti_cells={};self.selected_confetti_id=None;self.show_confetti=False;self.inspection_mode=False
         self.selection=None;self._selection_anchor=None;self._selection_press=None;self._selection_had_existing=False;self._selection_before_drag=None;self._move_origin=None;self._move_grab=None;self._move_preview=None;self.allow_selection_move=False;self.last_mouse_cell=None
         self.setMouseTracking(True);self.setFocusPolicy(Qt.FocusPolicy.StrongFocus);self.setMinimumSize(400,350)
@@ -32,6 +32,12 @@ class PatternCanvas(QWidget):
             image.putdata(pixels)
         self._image=QImage(ImageQt(image)).copy();self.update()
 
+    def set_source_reference(self,image):
+        self._source_reference=QImage(ImageQt(image)).copy() if image is not None else QImage();self.show_source_overlay=False;self.update()
+
+    @property
+    def source_reference_available(self):return not self._source_reference.isNull()
+
     def paintEvent(self,_event):
         painter=QPainter(self);painter.fillRect(self.rect(),QColor(45,45,48))
         if not self.pattern:return
@@ -39,11 +45,8 @@ class PatternCanvas(QWidget):
         if self.pattern.supports_transparency:
             tile=QPixmap(16,16);tile.fill(QColor(225,225,225));tile_painter=QPainter(tile);tile_painter.fillRect(8,0,8,8,QColor(180,180,180));tile_painter.fillRect(0,8,8,8,QColor(180,180,180));tile_painter.end();painter.drawTiledPixmap(target,tile)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform,False);painter.drawImage(target,self._image)
-        if self.cell_size>=5:
-            for x in range(self.pattern.width+1):
-                strong=x%10==0;painter.setPen(QPen(QColor(20,20,20,210 if strong else 90),2 if strong else 1));px=self.offset.x()+x*self.cell_size;painter.drawLine(px,self.offset.y(),px,self.offset.y()+self.pattern.height*self.cell_size)
-            for y in range(self.pattern.height+1):
-                strong=y%10==0;painter.setPen(QPen(QColor(20,20,20,210 if strong else 90),2 if strong else 1));py=self.offset.y()+y*self.cell_size;painter.drawLine(self.offset.x(),py,self.offset.x()+self.pattern.width*self.cell_size,py)
+        if self.show_source_overlay and self.source_reference_available and self.source_overlay_opacity>0:
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform,True);painter.setOpacity(self.source_overlay_opacity);painter.drawImage(target,self._source_reference);painter.setOpacity(1.0);painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform,False)
         if self.show_confetti and self.confetti_analysis and not self.confetti_analysis.stale:
             colors={"High":QColor(255,0,170,90),"Medium":QColor(255,145,0,85),"Low":QColor(0,200,255,70)}
             for region in self.confetti_analysis.suspects:
@@ -51,6 +54,12 @@ class PatternCanvas(QWidget):
                 fill=colors[region.confidence];pen=QPen(QColor(fill.red(),fill.green(),fill.blue(),230),2 if region.region_id==self.selected_confetti_id else 1);painter.setPen(pen);painter.setBrush(fill)
                 for index in region.cells:
                     x=index%self.pattern.width;y=index//self.pattern.width;painter.drawRect(self.offset.x()+x*self.cell_size,self.offset.y()+y*self.cell_size,self.cell_size,self.cell_size)
+        if self.cell_size>=5:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            for x in range(self.pattern.width+1):
+                strong=x%10==0;painter.setPen(QPen(QColor(20,20,20,210 if strong else 90),2 if strong else 1));px=self.offset.x()+x*self.cell_size;painter.drawLine(px,self.offset.y(),px,self.offset.y()+self.pattern.height*self.cell_size)
+            for y in range(self.pattern.height+1):
+                strong=y%10==0;painter.setPen(QPen(QColor(20,20,20,210 if strong else 90),2 if strong else 1));py=self.offset.y()+y*self.cell_size;painter.drawLine(self.offset.x(),py,self.offset.x()+self.pattern.width*self.cell_size,py)
         if self.selection:
             left,top,right,bottom=self._move_preview or self.selection;rect=QRectF(self.offset.x()+left*self.cell_size,self.offset.y()+top*self.cell_size,(right-left)*self.cell_size,(bottom-top)*self.cell_size)
             if self._move_preview:painter.fillRect(rect,QColor(0,170,255,45))

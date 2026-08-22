@@ -83,6 +83,19 @@ def prepare_logical_image(source: Image.Image, settings: ConversionSettings) -> 
     fitted_alpha = _fit(alpha, (settings.width, settings.height), settings.fit_mode, 0)
     return Image.merge("RGBA", (*rgb.split(), fitted_alpha))
 
+def prepare_source_reference(source: Image.Image,settings: ConversionSettings,max_dimension=4096) -> Image.Image:
+    """Build one adjusted, cropped high-detail reference aligned to the logical grid aspect."""
+    settings.validate();rgba=source.convert("RGBA")
+    if settings.preserve_transparency:image=rgba
+    else:image=Image.new("RGBA",rgba.size,(255,255,255,255));image.alpha_composite(rgba)
+    image=image.crop(normalized_crop_box(settings.crop_box,source.size));alpha=image.getchannel("A");image=image.convert("RGB")
+    image=ImageEnhance.Brightness(image).enhance(_factor(settings.brightness));image=ImageEnhance.Contrast(image).enhance(_factor(settings.contrast));image=ImageEnhance.Color(image).enhance(_factor(settings.saturation))
+    aspect=settings.width/settings.height;long_edge=max(1,min(max_dimension,max(image.size)))
+    target=(long_edge,max(1,round(long_edge/aspect))) if aspect>=1 else (max(1,round(long_edge*aspect)),long_edge)
+    rgb=_fit(image,target,settings.fit_mode,"white")
+    if not settings.preserve_transparency:return rgb
+    fitted_alpha=_fit(alpha,target,settings.fit_mode,0);return Image.merge("RGBA",(*rgb.split(),fitted_alpha))
+
 def convert_image(source: Image.Image, settings: ConversionSettings) -> tuple[Image.Image, list[PaletteEntry]]:
     image = prepare_logical_image(source, settings)
     dither = Image.Dither.NONE if settings.dither == DitherMode.OFF else Image.Dither.FLOYDSTEINBERG

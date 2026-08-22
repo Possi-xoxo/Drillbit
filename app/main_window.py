@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
     QTabWidget, QVBoxLayout, QWidget)
 from .exporter import export_png
 from .pdf_exporter import export_pattern_pdf
-from .image_processor import ImageLoadError, aspect_height, aspect_width, load_image
+from .image_processor import ImageLoadError, aspect_height, aspect_width, load_image, prepare_source_reference
 from .inventory import OwnedColorInventory
 from .models import ConversionSettings, DitherMode, FitMode
 from .palette_system import load_dmc_palette
@@ -21,6 +21,7 @@ from .widgets.crop_view import CropView
 from .widgets.editor_panel import EditorPanel
 from .widgets.image_view import ImageView
 from .widgets.inventory_dialog import InventoryDialog
+from .finished_preview import FinishedPreviewPanel
 from .logging_manager import diagnostic_summary,get_log_directory,get_log_path,record_action,set_diagnostic_context
 
 LOG = logging.getLogger(__name__)
@@ -97,8 +98,8 @@ class MainWindow(QMainWindow):
         self.print_button = QPushButton("Print Pattern PDF…"); self.print_button.setEnabled(False)
         self.open_project_button=QPushButton("Open Project…");self.save_project_button=QPushButton("Save Project");self.save_project_as_button=QPushButton("Save As…")
         self.regenerate_button=QPushButton("Regenerate Pattern");self.regenerate_button.setToolTip("Rebuild the automatic DMC pattern from the current source settings.")
-        self.reset_button = QPushButton("Reset")
-        for button in (self.open_button,self.open_project_button,self.save_project_button,self.save_project_as_button,self.regenerate_button,self.export_button,self.print_button,self.reset_button): toolbar.addWidget(button)
+        self.finished_preview_button=QPushButton("Finished Preview");self.finished_preview_button.setToolTip("Preview the current pattern as completed square or round drills.");self.finished_preview_button.setEnabled(False);self.reset_button = QPushButton("Reset")
+        for button in (self.open_button,self.open_project_button,self.save_project_button,self.save_project_as_button,self.regenerate_button,self.export_button,self.print_button,self.finished_preview_button,self.reset_button): toolbar.addWidget(button)
         toolbar.addStretch(); outer.addLayout(toolbar)
         splitter = QSplitter(); pictures = QWidget(); picture_layout = QHBoxLayout(pictures)
         original_panel=QWidget(); original_layout=QVBoxLayout(original_panel); original_heading=QLabel("Crop & Reposition"); original_heading.setObjectName("panelHeading")
@@ -106,13 +107,14 @@ class MainWindow(QMainWindow):
         original_layout.addWidget(original_heading); original_layout.addWidget(self.original_view,1); original_layout.addWidget(original_hint)
         self.preview_view = ImageView("Diamond-Art Preview", "Your converted pattern will appear here")
         picture_layout.addWidget(original_panel, 1); picture_layout.addWidget(self.preview_view, 1)
-        self.editor=EditorPanel();self.tabs=QTabWidget();self.tabs.addTab(pictures,"1. Image & Convert");self.tabs.addTab(self.editor,"2. Edit Pattern");splitter.addWidget(self.tabs)
+        self.editor=EditorPanel();self.finished_preview=FinishedPreviewPanel();self.tabs=QTabWidget();self.tabs.addTab(pictures,"1. Image & Convert");self.tabs.addTab(self.editor,"2. Edit Pattern");self.tabs.addTab(self.finished_preview,"3. Finished Preview");splitter.addWidget(self.tabs)
         scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setMinimumWidth(330); settings = QWidget(); form = QFormLayout(settings)
         self.width_box = QSpinBox(); self.width_box.setRange(10, 1000); self.width_box.setValue(100)
         self.height_box = QSpinBox(); self.height_box.setRange(10, 1000); self.height_box.setValue(100)
         self.lock_aspect = QCheckBox("Lock Aspect Ratio"); self.lock_aspect.setChecked(True)
         self.size_mode=QComboBox(); self.size_mode.addItems(["Diamonds", "Finished Size"])
-        self.drill_size=QDoubleSpinBox(); self.drill_size.setRange(2.0,4.0); self.drill_size.setSingleStep(0.1); self.drill_size.setValue(2.5); self.drill_size.setSuffix(" mm")
+        self.drill_size=QDoubleSpinBox(); self.drill_size.setRange(2.0,4.0); self.drill_size.setSingleStep(0.1); self.drill_size.setValue(2.5); self.drill_size.setSuffix(" mm");self.drill_size.setToolTip("Physical spacing from one drill position to the next. This determines the finished pattern size.")
+        self.drill_shape=QComboBox();self.drill_shape.addItems(("Square","Round"));self.drill_shape.setToolTip("Changes how drills are visualized. It does not change the logical pattern.")
         self.physical_unit=QComboBox(); self.physical_unit.addItems(["in", "cm"])
         self.physical_width=QDoubleSpinBox(); self.physical_width.setRange(0.1,160); self.physical_width.setDecimals(2)
         self.physical_height=QDoubleSpinBox(); self.physical_height.setRange(0.1,160); self.physical_height.setDecimals(2)
@@ -130,7 +132,7 @@ class MainWindow(QMainWindow):
         self.pattern_label = QLabel(); self.total_label = QLabel(); self.color_label = QLabel("Colors Used: —")
         self.finished_label=QLabel(); self.finished_label.setStyleSheet("font-weight: 600; font-size: 13px;")
         self.palette_list = QListWidget(); self.palette_list.setMinimumHeight(200)
-        rows = [("Active palette",QLabel("DMC Reference Palette")),("Size mode",self.size_mode),("Drill size",self.drill_size),("Width (diamonds)", self.width_box), ("Height (diamonds)", self.height_box), ("", self.lock_aspect),
+        rows = [("Active palette",QLabel("DMC Reference Palette")),("Size mode",self.size_mode),("Drill Pitch",self.drill_size),("Drill Shape",self.drill_shape),("Width (diamonds)", self.width_box), ("Height (diamonds)", self.height_box), ("", self.lock_aspect),
             ("Finished width",self.physical_width),("Finished height",self.physical_height),("Units",self.physical_unit),("",self.reset_crop),
             ("Image fit", self.fit_mode), ("Maximum colors", self.colors),("",self.only_owned),("",self.manage_owned),("",self.owned_summary), ("Dithering", self.dither),("",self.preserve_transparency),
             ("Brightness", self.brightness), ("Contrast", self.contrast), ("Saturation", self.saturation),
@@ -146,6 +148,7 @@ class MainWindow(QMainWindow):
         self.open_button.clicked.connect(self.open_image_dialog); self.export_button.clicked.connect(self.export_dialog)
         self.open_log_folder_action.triggered.connect(self._open_log_folder);self.open_latest_log_action.triggered.connect(self._open_latest_log);self.copy_diagnostic_action.triggered.connect(self._copy_diagnostic_summary)
         self.print_button.clicked.connect(self.print_pdf_dialog)
+        self.finished_preview_button.clicked.connect(self._open_finished_preview);self.tabs.currentChanged.connect(self._tab_changed);self.finished_preview.preferenceChanged.connect(self._finished_preference_changed);self.drill_shape.currentTextChanged.connect(self._drill_shape_changed)
         self.open_project_button.clicked.connect(self.open_project_dialog);self.save_project_button.clicked.connect(self.save_current_project);self.save_project_as_button.clicked.connect(lambda:self.save_current_project(True))
         self.regenerate_button.clicked.connect(self.regenerate_pattern);self.editor.changed.connect(self._editor_changed)
         self.reset_button.clicked.connect(self.reset_all); self.reset_adjustments.clicked.connect(self._reset_adjustments)
@@ -203,8 +206,8 @@ class MainWindow(QMainWindow):
         if self.only_owned.isChecked() and not self.inventory.owned:self._show_empty_owned_inventory();return
         try:
             settings=self._settings();record_action("Conversion requested");set_diagnostic_context(pattern=f"{settings.width} x {settings.height}",max_colors=settings.max_colors,transparency=settings.preserve_transparency)
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor); self.pattern=convert_to_pattern(self.source,self._settings(),self.palette,self.inventory.owned);self.logical=self.pattern.to_image()
-            self.editor.set_pattern(self.pattern);self._render_preview();self._show_palette(self.pattern.used_colors());self._update_stats();self.export_button.setEnabled(True); self.print_button.setEnabled(True);self.dirty=True;self._update_title();self.statusBar().showMessage("DMC pattern updated")
+            overlay_state=self.editor.source_overlay_state();QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor);self.pattern=convert_to_pattern(self.source,settings,self.palette,self.inventory.owned);self.pattern.metadata["source_reference_settings"]=self._conversion_settings_payload(settings);self.logical=self.pattern.to_image();reference=prepare_source_reference(self.source,settings);LOG.debug("Source overlay cache rebuilt size=%sx%s",reference.width,reference.height)
+            self.editor.set_pattern(self.pattern,reference,overlay_state);self._sync_finished_preview();self._render_preview();self._show_palette(self.pattern.used_colors());self._update_stats();self.export_button.setEnabled(True);self.print_button.setEnabled(True);self.finished_preview_button.setEnabled(True);self.dirty=True;self._update_title();self.statusBar().showMessage("DMC pattern updated")
         except Exception as exc: LOG.exception("Conversion failed"); QMessageBox.critical(self, "Conversion Failed", str(exc))
         finally: QApplication.restoreOverrideCursor()
 
@@ -222,6 +225,24 @@ class MainWindow(QMainWindow):
             for x in range(0, preview.width, 8): draw.line((x, 0, x, preview.height - 1), fill=(70, 70, 70))
             for y in range(0, preview.height, 8): draw.line((0, y, preview.width - 1, y), fill=(70, 70, 70))
         self.preview_view.set_pil_image(preview, nearest=True)
+
+    def _sync_finished_preview(self,state=None):
+        if not self.pattern:return
+        state=state or self.finished_preview.state();self.pattern.metadata["drill_shape"]=self.drill_shape.currentText();self.finished_preview.set_pattern(self.pattern,self.drill_shape.currentText(),self.drill_size.value(),state.get("canvas_background","White"),state.get("finished_preview_grid",False))
+
+    def _open_finished_preview(self):
+        if not self.pattern:return
+        self.tabs.setCurrentIndex(2);self.finished_preview.ensure_current();LOG.info("Finished preview opened")
+
+    def _tab_changed(self,index):
+        if index==2 and self.pattern:self.finished_preview.ensure_current()
+
+    def _drill_shape_changed(self,shape):
+        if not self.pattern:return
+        self.pattern.metadata["drill_shape"]=shape;self._sync_finished_preview();self.dirty=True;self._update_title();LOG.info("Drill shape changed to %s",shape)
+
+    def _finished_preference_changed(self):
+        if self.pattern:self.dirty=True;self._update_title()
 
     def _show_palette(self, palette):
         self.palette_list.clear()
@@ -279,7 +300,7 @@ class MainWindow(QMainWindow):
     def reset_all(self):
         if self.manual_edits and QMessageBox.question(self,"Reset and Regenerate","Resetting will discard manual cell edits. Continue?")!=QMessageBox.StandardButton.Yes:return
         self.width_box.setValue(100); self.fit_mode.setCurrentText(FitMode.FILL.value); self.colors.setCurrentText("16")
-        self.dither.setCurrentText(DitherMode.OFF.value);self.preserve_transparency.setChecked(False);self.only_owned.setChecked(False); self.show_grid.setChecked(False); self.lock_aspect.setChecked(True); self.drill_size.setValue(2.5); self.size_mode.setCurrentIndex(0); self._reset_adjustments(); self.original_view.reset_crop()
+        self.dither.setCurrentText(DitherMode.OFF.value);self.preserve_transparency.setChecked(False);self.only_owned.setChecked(False);self.show_grid.setChecked(False);self.lock_aspect.setChecked(True);self.drill_size.setValue(2.5);self.drill_shape.setCurrentText("Square");self.finished_preview.background.setCurrentText("White");self.finished_preview.show_grid.setChecked(False);self.size_mode.setCurrentIndex(0);self._reset_adjustments();self.original_view.reset_crop()
         if self.source is not None:self._set_height(aspect_height(100,*self.source.size));self.manual_edits=False;self.refresh_preview()
 
     def export_dialog(self):
@@ -298,7 +319,10 @@ class MainWindow(QMainWindow):
         finished=index==1; self.width_box.setEnabled(not finished); self.height_box.setEnabled(not finished)
         self.physical_width.setEnabled(finished); self.physical_height.setEnabled(finished); self.physical_unit.setEnabled(finished)
 
-    def _physical_settings_changed(self, *_): self._update_stats(); self.schedule_preview()
+    def _physical_settings_changed(self, *_):
+        self._update_stats()
+        if self.pattern:self.finished_preview.drill_pitch=self.drill_size.value();self.finished_preview._update_info()
+        self.schedule_preview()
 
     def _physical_input_changed(self, from_width, value):
         if self._syncing_physical or self.size_mode.currentIndex()!=1: return
@@ -321,7 +345,7 @@ class MainWindow(QMainWindow):
         path,_=QFileDialog.getSaveFileName(self,"Save Printable Pattern",name,"PDF Document (*.pdf)")
         if not path: return
         try:
-            orientation,margin,overlap,include_symbols,include_legend=dialog.values();record_action("PDF export started");LOG.info("PDF export started orientation=%s symbols=%s legend=%s",orientation.value,include_symbols,include_legend);saved,layout=export_pattern_pdf(self.pattern,path,self.drill_size.value(),orientation,margin,overlap,include_symbols,include_legend);LOG.info("PDF export completed pages=%s",layout.tile_count);record_action("PDF export completed")
+            orientation,margin,overlap,include_symbols,include_legend=dialog.values();record_action("PDF export started");LOG.info("PDF export started orientation=%s symbols=%s legend=%s",orientation.value,include_symbols,include_legend);saved,layout=export_pattern_pdf(self.pattern,path,self.drill_size.value(),orientation,margin,overlap,include_symbols,include_legend,drill_shape=self.drill_shape.currentText());LOG.info("PDF export completed pages=%s",layout.tile_count);record_action("PDF export completed")
             QMessageBox.information(self,"PDF Complete",f"Printable pattern saved to:\n{saved}\n\nChart pages: {layout.tile_count}\nPrint at 100% / Actual Size.")
         except Exception as exc: LOG.exception("PDF export failed"); QMessageBox.critical(self,"PDF Export Failed",f"The printable pattern could not be created.\n\n{exc}")
 
@@ -332,14 +356,20 @@ class MainWindow(QMainWindow):
 
     def _editor_changed(self):
         if not self.pattern:return
-        self.logical=self.pattern.to_image();self.manual_edits=True;self.dirty=True;self._render_preview();self._show_palette(self.pattern.used_colors());self._update_stats();self._update_title()
+        self.logical=self.pattern.to_image();self.manual_edits=True;self.dirty=True;self.finished_preview.invalidate();self._render_preview();self._show_palette(self.pattern.used_colors());self._update_stats();self._update_title()
 
     def _project_settings(self):
         settings=self._settings()
         return {"width":settings.width,"height":settings.height,"max_colors":settings.max_colors,"fit_mode":settings.fit_mode.value,
                 "dither":settings.dither.value,"brightness":settings.brightness,"contrast":settings.contrast,"saturation":settings.saturation,
-                "crop_box":list(settings.crop_box) if settings.crop_box else None,"drill_mm":self.drill_size.value(),
+                "crop_box":list(settings.crop_box) if settings.crop_box else None,"drill_mm":self.drill_size.value(),"drill_shape":self.drill_shape.currentText(),**self.finished_preview.state(),
                 "preserve_transparency":settings.preserve_transparency,"alpha_threshold":settings.alpha_threshold,"only_use_owned_colors":settings.only_use_owned_colors}
+
+    def _conversion_settings_payload(self,settings):
+        return {"width":settings.width,"height":settings.height,"max_colors":settings.max_colors,"fit_mode":settings.fit_mode.value,"dither":settings.dither.value,"brightness":settings.brightness,"contrast":settings.contrast,"saturation":settings.saturation,"crop_box":list(settings.crop_box) if settings.crop_box else None,"preserve_transparency":settings.preserve_transparency,"alpha_threshold":settings.alpha_threshold,"only_use_owned_colors":settings.only_use_owned_colors}
+
+    def _reference_settings(self,data,pattern):
+        return ConversionSettings(width=pattern.width,height=pattern.height,max_colors=int(data.get("max_colors",16)),fit_mode=FitMode(data.get("fit_mode",FitMode.FILL.value)),dither=DitherMode(data.get("dither",DitherMode.OFF.value)),brightness=int(data.get("brightness",0)),contrast=int(data.get("contrast",0)),saturation=int(data.get("saturation",0)),crop_box=tuple(data["crop_box"]) if data.get("crop_box") else None,preserve_transparency=bool(data.get("preserve_transparency",False)),alpha_threshold=int(data.get("alpha_threshold",128)),only_use_owned_colors=bool(data.get("only_use_owned_colors",False)))
 
     def save_current_project(self,save_as=False):
         if self.pattern is None:QMessageBox.information(self,"Nothing to Save","Open an image and create a pattern first.");return False
@@ -349,7 +379,7 @@ class MainWindow(QMainWindow):
             path,_=QFileDialog.getSaveFileName(self,"Save Diamond Art Project",name,"Diamond Art Project (*.diamond)")
             if not path:return False
         try:
-            self.project_path=save_project(path,self.pattern,self.source,self._project_settings(),{"selected_code":self.editor.canvas.selected_code});LOG.info("Project saved");record_action("Project saved")
+            self.project_path=save_project(path,self.pattern,self.source,self._project_settings(),{"selected_code":self.editor.canvas.selected_code,**self.editor.source_overlay_state()});LOG.info("Project saved");record_action("Project saved")
             self.dirty=False;self._update_title();self.statusBar().showMessage(f"Saved {self.project_path.name}");return True
         except Exception as exc:LOG.exception("Project save failed");QMessageBox.critical(self,"Save Failed",str(exc));return False
 
@@ -365,8 +395,12 @@ class MainWindow(QMainWindow):
             pattern,source,settings,editor_state=load_project(path,self.palette);self.pattern=pattern;self.source=source;self.project_path=Path(path);self.source_path=None;self.manual_edits=True
             self._apply_project_settings(settings)
             if source is not None:self.original_view.set_pil_image(source);self.original_view.set_crop_box(settings.get("crop_box"))
-            self.logical=pattern.to_image();self.editor.set_pattern(pattern);self.editor.select_code(editor_state.get("selected_code",next(iter(pattern.usage),None)))
-            self._render_preview();self._show_palette(pattern.used_colors());self.export_button.setEnabled(True);self.print_button.setEnabled(True);self.manual_edits=True;self.dirty=False;self._update_stats();self._update_title();self.tabs.setCurrentIndex(1)
+            reference=None
+            if source is not None:
+                reference_data=pattern.metadata.get("source_reference_settings",settings);reference=prepare_source_reference(source,self._reference_settings(reference_data,pattern));LOG.debug("Source overlay cache rebuilt size=%sx%s",reference.width,reference.height)
+            else:LOG.debug("Overlay source unavailable")
+            self.logical=pattern.to_image();self.editor.set_pattern(pattern,reference,editor_state);self.editor.select_code(editor_state.get("selected_code",next(iter(pattern.usage),None)));self._sync_finished_preview(settings)
+            self._render_preview();self._show_palette(pattern.used_colors());self.export_button.setEnabled(True);self.print_button.setEnabled(True);self.finished_preview_button.setEnabled(True);self.manual_edits=True;self.dirty=False;self._update_stats();self._update_title();self.tabs.setCurrentIndex(1)
             LOG.info("Project opened pattern=%sx%s colors=%s",pattern.width,pattern.height,len(pattern.usage));record_action("Project opened")
         except Exception as exc:LOG.exception("Project open failed");QMessageBox.critical(self,"Open Project Failed",str(exc))
 
@@ -393,7 +427,7 @@ class MainWindow(QMainWindow):
     def _apply_project_settings(self,data):
         self._changing=True;self.width_box.setValue(data.get("width",100));self.height_box.setValue(data.get("height",100));self._changing=False
         self.colors.setCurrentText(str(data.get("max_colors",16)));self.fit_mode.setCurrentText(data.get("fit_mode",FitMode.FILL.value));self.dither.setCurrentText(data.get("dither",DitherMode.OFF.value))
-        self.brightness.slider.setValue(data.get("brightness",0));self.contrast.slider.setValue(data.get("contrast",0));self.saturation.slider.setValue(data.get("saturation",0));self.drill_size.setValue(data.get("drill_mm",2.5))
+        self.brightness.slider.setValue(data.get("brightness",0));self.contrast.slider.setValue(data.get("contrast",0));self.saturation.slider.setValue(data.get("saturation",0));self.drill_size.setValue(data.get("drill_mm",2.5));self.drill_shape.setCurrentText(data.get("drill_shape","Square"))
         self.preserve_transparency.setChecked(data.get("preserve_transparency",False))
         self.only_owned.setChecked(data.get("only_use_owned_colors",False))
 
