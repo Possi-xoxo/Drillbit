@@ -22,6 +22,7 @@ class ConversionSettings:
     crop_box: tuple[float, float, float, float] | None = None
     preserve_transparency: bool = False
     alpha_threshold: int = 128
+    only_use_owned_colors: bool = False
 
     def validate(self) -> None:
         if not 10 <= self.width <= 1000 or not 10 <= self.height <= 1000:

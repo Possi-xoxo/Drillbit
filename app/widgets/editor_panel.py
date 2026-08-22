@@ -9,7 +9,7 @@ from ..pattern_model import UndoStack
 class EditorPanel(QWidget):
     changed=Signal()
     def __init__(self,parent=None):
-        super().__init__(parent);self.pattern=None;self.undo_stack=UndoStack();layout=QVBoxLayout(self);tools=QHBoxLayout()
+        super().__init__(parent);self.pattern=None;self.owned_codes=set();self.undo_stack=UndoStack();layout=QVBoxLayout(self);tools=QHBoxLayout()
         self.tool_group=QButtonGroup(self);self.tool_group.setExclusive(True);self.tool_buttons={}
         for name,tooltip in (("Pencil","Paint individual diamond cells"),("Eyedropper","Pick a color from the pattern"),("Flood Fill","Fill a connected area with the selected color"),("Eraser","Clear cells to transparent / no drill")):
             button=QToolButton();button.setText(name);button.setCheckable(True);button.setToolTip(tooltip);button.setAutoRaise(False)
@@ -42,6 +42,8 @@ class EditorPanel(QWidget):
         self.pattern=pattern;self.undo_stack=UndoStack();self.undo_stack.add_listener(self._history_changed);self.canvas.set_pattern(pattern,self.undo_stack);self.tool_buttons["Eraser"].setEnabled(pattern.supports_transparency);self.select_tool("Pencil");self._populate_palette();self._refresh_used()
         if pattern.usage:self.select_code(next(iter(pattern.usage)))
 
+    def set_owned_codes(self,codes):self.owned_codes=set(codes);self._populate_palette()
+
     def _tool_selected(self,button):self.canvas.tool=button.text()
     def select_tool(self,name):
         button=self.tool_buttons[name];button.setChecked(True);self.canvas.tool=name
@@ -53,7 +55,7 @@ class EditorPanel(QWidget):
         query=self.search.text().strip().lower()
         for color in self.pattern.palette.colors:
             if query and query not in color.code.lower() and query not in color.name.lower():continue
-            item=QListWidgetItem(f"DMC {color.code} - {color.name}");item.setData(Qt.ItemDataRole.UserRole,color.code);item.setIcon(self._icon(color.rgb));self.palette_list.addItem(item)
+            marker="✓ " if color.code in self.owned_codes else "";item=QListWidgetItem(f"{marker}DMC {color.code} - {color.name}");item.setData(Qt.ItemDataRole.UserRole,color.code);item.setIcon(self._icon(color.rgb));self.palette_list.addItem(item)
 
     def _refresh_used(self):
         self.used_list.clear();total=max(1,self.pattern.total_drills)

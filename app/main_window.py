@@ -1,5 +1,4 @@
 import logging
-import sys
 from pathlib import Path
 from PIL import Image, ImageDraw
 from PySide6.QtCore import QStandardPaths, Qt, QTimer, QUrl
@@ -11,24 +10,20 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
 from .exporter import export_png
 from .pdf_exporter import export_pattern_pdf
 from .image_processor import ImageLoadError, aspect_height, aspect_width, load_image
+from .inventory import OwnedColorInventory
 from .models import ConversionSettings, DitherMode, FitMode
 from .palette_system import load_dmc_palette
 from .pattern_converter import convert_to_pattern
 from .project_io import load_project, save_project
 from .physical import Orientation, calculate_page_layout, drills_from_physical, finished_size_mm, mm_to_inches
+from .single_instance import SUPPORTED_FILE_SUFFIXES,select_incoming_file
 from .widgets.crop_view import CropView
 from .widgets.editor_panel import EditorPanel
 from .widgets.image_view import ImageView
-from .logging_manager import (begin_session,configure_logging,diagnostic_summary,end_session,get_log_directory,get_log_path,
-    install_exception_hooks,log_unhandled_exception,record_action,set_diagnostic_context)
+from .widgets.inventory_dialog import InventoryDialog
+from .logging_manager import diagnostic_summary,get_log_directory,get_log_path,record_action,set_diagnostic_context
 
 LOG = logging.getLogger(__name__)
-
-class SafeApplication(QApplication):
-    def notify(self,receiver,event):
-        try:return super().notify(receiver,event)
-        except Exception:
-            exc_type,exc_value,exc_traceback=sys.exc_info();log_unhandled_exception(exc_type,exc_value,exc_traceback);return False
 
 def _crash_dialog(report):
     box=QMessageBox(QMessageBox.Icon.Critical,"Unexpected Error","Drillbit encountered an unexpected error.\n\nDetails were written to the application log.",parent=QApplication.activeWindow())
@@ -85,11 +80,13 @@ class PrintDialog(QDialog):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__(); self.source = self.logical = self.pattern = self.source_path = None; self._changing = False; self._syncing_physical = False
-        self.palette=load_dmc_palette();self.project_path=None;self.dirty=False;self.manual_edits=False
+        self.palette=load_dmc_palette();self.inventory=OwnedColorInventory(self.palette);self.project_path=None;self.dirty=False;self.manual_edits=False
         self.setWindowTitle("Diamond Art Converter"); self.resize(1320, 820); self.setAcceptDrops(True)
         self._build_ui(); self._connect()
         self.timer = QTimer(self); self.timer.setSingleShot(True); self.timer.setInterval(180); self.timer.timeout.connect(self.refresh_preview)
         self._update_stats()
+        self.editor.set_owned_codes(self.inventory.owned)
+        if self.inventory.load_error:QTimer.singleShot(0,lambda:QMessageBox.warning(self,"Colors I Own","The owned-color inventory could not be read. Drillbit preserved the file and started with an empty inventory. See Diagnostics for details."))
 
     def _build_ui(self):
         diagnostics=self.menuBar().addMenu("Help").addMenu("Diagnostics")
@@ -122,6 +119,8 @@ class MainWindow(QMainWindow):
         self.physical_width.setEnabled(False); self.physical_height.setEnabled(False); self.physical_unit.setEnabled(False)
         self.fit_mode = QComboBox(); self.fit_mode.addItems([m.value for m in FitMode]); self.fit_mode.setCurrentText(FitMode.FILL.value)
         self.colors = QComboBox(); self.colors.addItems([str(n) for n in (8, 12, 16, 24, 32, 48, 64)]); self.colors.setCurrentText("16")
+        self.only_owned=QCheckBox("Only Use Colors I Own");self.only_owned.setToolTip("Restrict automatic conversion to DMC colors marked as owned in your inventory.")
+        self.manage_owned=QPushButton("Manage Colors I Own");self.owned_summary=QLabel();self.owned_summary.setWordWrap(True)
         self.dither = QComboBox(); self.dither.addItems([m.value for m in DitherMode])
         self.dither.setToolTip("Floyd-Steinberg mixes neighboring colors; Off keeps cleaner solid regions.")
         self.colors.setToolTip("Limits the final pattern to this many DMC reference colors.")
@@ -133,7 +132,7 @@ class MainWindow(QMainWindow):
         self.palette_list = QListWidget(); self.palette_list.setMinimumHeight(200)
         rows = [("Active palette",QLabel("DMC Reference Palette")),("Size mode",self.size_mode),("Drill size",self.drill_size),("Width (diamonds)", self.width_box), ("Height (diamonds)", self.height_box), ("", self.lock_aspect),
             ("Finished width",self.physical_width),("Finished height",self.physical_height),("Units",self.physical_unit),("",self.reset_crop),
-            ("Image fit", self.fit_mode), ("Maximum colors", self.colors), ("Dithering", self.dither),("",self.preserve_transparency),
+            ("Image fit", self.fit_mode), ("Maximum colors", self.colors),("",self.only_owned),("",self.manage_owned),("",self.owned_summary), ("Dithering", self.dither),("",self.preserve_transparency),
             ("Brightness", self.brightness), ("Contrast", self.contrast), ("Saturation", self.saturation),
             ("", self.reset_adjustments), ("", self.show_grid)]
         for label, widget in rows: form.addRow(label, widget)
@@ -158,6 +157,7 @@ class MainWindow(QMainWindow):
         self.physical_height.valueChanged.connect(lambda value: self._physical_input_changed(False, value))
         for control in (self.fit_mode, self.colors, self.dither): control.currentIndexChanged.connect(self.schedule_preview)
         self.preserve_transparency.toggled.connect(self.schedule_preview)
+        self.only_owned.toggled.connect(self.schedule_preview);self.manage_owned.clicked.connect(self.manage_owned_colors)
         for row in (self.brightness, self.contrast, self.saturation): row.slider.valueChanged.connect(self.schedule_preview)
         self.show_grid.toggled.connect(self._render_preview)
 
@@ -189,7 +189,7 @@ class MainWindow(QMainWindow):
         return ConversionSettings(width=self.width_box.value(), height=self.height_box.value(), max_colors=int(self.colors.currentText()),
             fit_mode=FitMode(self.fit_mode.currentText()), dither=DitherMode(self.dither.currentText()), brightness=self.brightness.slider.value(),
             contrast=self.contrast.slider.value(), saturation=self.saturation.slider.value(), crop_box=self.original_view.crop_box,
-            preserve_transparency=self.preserve_transparency.isChecked())
+            preserve_transparency=self.preserve_transparency.isChecked(),only_use_owned_colors=self.only_owned.isChecked())
 
     def schedule_preview(self, *_):
         self._update_stats()
@@ -200,9 +200,10 @@ class MainWindow(QMainWindow):
 
     def refresh_preview(self):
         if self.source is None: return
+        if self.only_owned.isChecked() and not self.inventory.owned:self._show_empty_owned_inventory();return
         try:
             settings=self._settings();record_action("Conversion requested");set_diagnostic_context(pattern=f"{settings.width} x {settings.height}",max_colors=settings.max_colors,transparency=settings.preserve_transparency)
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor); self.pattern=convert_to_pattern(self.source,self._settings(),self.palette);self.logical=self.pattern.to_image()
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor); self.pattern=convert_to_pattern(self.source,self._settings(),self.palette,self.inventory.owned);self.logical=self.pattern.to_image()
             self.editor.set_pattern(self.pattern);self._render_preview();self._show_palette(self.pattern.used_colors());self._update_stats();self.export_button.setEnabled(True); self.print_button.setEnabled(True);self.dirty=True;self._update_title();self.statusBar().showMessage("DMC pattern updated")
         except Exception as exc: LOG.exception("Conversion failed"); QMessageBox.critical(self, "Conversion Failed", str(exc))
         finally: QApplication.restoreOverrideCursor()
@@ -232,6 +233,8 @@ class MainWindow(QMainWindow):
         requested=self.pattern.metadata.get("requested_colors",self.colors.currentText()) if self.pattern else self.colors.currentText()
         reason=self.pattern.metadata.get("utilization_reason","") if self.pattern else ""
         text=f"Requested maximum: {requested}\nColors used: {len(palette)} of {requested}"
+        if self.pattern and self.pattern.metadata.get("only_use_owned_colors"):
+            text+=f"\nOwned colors available: {self.pattern.metadata.get('owned_colors_available',0)}\nEffective palette limit: {self.pattern.metadata.get('effective_palette_limit',0)}"
         if reason:text+=f"\n{reason}"
         self.color_label.setText(text)
 
@@ -242,6 +245,23 @@ class MainWindow(QMainWindow):
         self.finished_label.setText(f"Finished Size: {wmm:g} × {hmm:g} mm\n{mm_to_inches(wmm):.2f} × {mm_to_inches(hmm):.2f} in")
         self._syncing_physical=True; factor=25.4 if self.physical_unit.currentText()=="in" else 10.0
         self.physical_width.setValue(wmm/factor); self.physical_height.setValue(hmm/factor); self._syncing_physical=False
+        self._update_owned_summary()
+
+    def _update_owned_summary(self):
+        count=len(self.inventory.owned);text=f"Owned colors available: {count}"
+        if self.only_owned.isChecked():text+=f"\nEffective palette limit: {min(int(self.colors.currentText()),count) if count else 0}"
+        self.owned_summary.setText(text)
+
+    def manage_owned_colors(self):
+        InventoryDialog(self.inventory,self).exec();self.editor.set_owned_codes(self.inventory.owned);self._update_owned_summary()
+        if self.pattern:
+            unowned=set(self.pattern.usage)-self.inventory.owned
+            if self.only_owned.isChecked() and unowned:self.statusBar().showMessage(f"Current pattern uses {len(unowned)} colors not marked as owned. Regenerate to apply inventory changes.")
+
+    def _show_empty_owned_inventory(self):
+        box=QMessageBox(QMessageBox.Icon.Information,"Colors I Own","No owned DMC colors are selected.",parent=self)
+        manage=box.addButton("Manage Colors I Own",QMessageBox.ButtonRole.ActionRole);box.addButton(QMessageBox.StandardButton.Cancel);box.exec()
+        if box.clickedButton()==manage:self.manage_owned_colors()
 
     def _width_changed(self, value):
         if self.source is not None and self.lock_aspect.isChecked() and not self._changing: self._set_height(aspect_height(value, *self.source.size))
@@ -259,7 +279,7 @@ class MainWindow(QMainWindow):
     def reset_all(self):
         if self.manual_edits and QMessageBox.question(self,"Reset and Regenerate","Resetting will discard manual cell edits. Continue?")!=QMessageBox.StandardButton.Yes:return
         self.width_box.setValue(100); self.fit_mode.setCurrentText(FitMode.FILL.value); self.colors.setCurrentText("16")
-        self.dither.setCurrentText(DitherMode.OFF.value);self.preserve_transparency.setChecked(False); self.show_grid.setChecked(False); self.lock_aspect.setChecked(True); self.drill_size.setValue(2.5); self.size_mode.setCurrentIndex(0); self._reset_adjustments(); self.original_view.reset_crop()
+        self.dither.setCurrentText(DitherMode.OFF.value);self.preserve_transparency.setChecked(False);self.only_owned.setChecked(False); self.show_grid.setChecked(False); self.lock_aspect.setChecked(True); self.drill_size.setValue(2.5); self.size_mode.setCurrentIndex(0); self._reset_adjustments(); self.original_view.reset_crop()
         if self.source is not None:self._set_height(aspect_height(100,*self.source.size));self.manual_edits=False;self.refresh_preview()
 
     def export_dialog(self):
@@ -319,7 +339,7 @@ class MainWindow(QMainWindow):
         return {"width":settings.width,"height":settings.height,"max_colors":settings.max_colors,"fit_mode":settings.fit_mode.value,
                 "dither":settings.dither.value,"brightness":settings.brightness,"contrast":settings.contrast,"saturation":settings.saturation,
                 "crop_box":list(settings.crop_box) if settings.crop_box else None,"drill_mm":self.drill_size.value(),
-                "preserve_transparency":settings.preserve_transparency,"alpha_threshold":settings.alpha_threshold}
+                "preserve_transparency":settings.preserve_transparency,"alpha_threshold":settings.alpha_threshold,"only_use_owned_colors":settings.only_use_owned_colors}
 
     def save_current_project(self,save_as=False):
         if self.pattern is None:QMessageBox.information(self,"Nothing to Save","Open an image and create a pattern first.");return False
@@ -337,6 +357,9 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():return
         path,_=QFileDialog.getOpenFileName(self,"Open Diamond Art Project","","Diamond Art Project (*.diamond)")
         if not path:return
+        self.load_project_path(path)
+
+    def load_project_path(self,path):
         try:
             record_action("Opening project")
             pattern,source,settings,editor_state=load_project(path,self.palette);self.pattern=pattern;self.source=source;self.project_path=Path(path);self.source_path=None;self.manual_edits=True
@@ -347,11 +370,32 @@ class MainWindow(QMainWindow):
             LOG.info("Project opened pattern=%sx%s colors=%s",pattern.width,pattern.height,len(pattern.usage));record_action("Project opened")
         except Exception as exc:LOG.exception("Project open failed");QMessageBox.critical(self,"Open Project Failed",str(exc))
 
+    def activate_existing_window(self):
+        if self.isMinimized():self.showNormal()
+        elif self.isHidden():self.show()
+        self.raise_();self.activateWindow()
+        handle=self.windowHandle()
+        if handle is not None:handle.requestActivate()
+        QApplication.alert(self,1500);LOG.info("Existing window restored")
+
+    def handle_activation_request(self,files):
+        self.activate_existing_window()
+        if not files:return
+        selected=select_incoming_file(files)
+        if selected is None:
+            LOG.warning("No supported existing incoming file was provided")
+            QMessageBox.warning(self,"Could Not Open File","No supported existing Drillbit file was provided.");return
+        if len(files)>1:LOG.info("Multiple incoming files received; opening the first supported file only")
+        if not self._confirm_discard():return
+        if selected.suffix.lower()==".diamond":self.load_project_path(selected)
+        else:self.load_path(selected)
+
     def _apply_project_settings(self,data):
         self._changing=True;self.width_box.setValue(data.get("width",100));self.height_box.setValue(data.get("height",100));self._changing=False
         self.colors.setCurrentText(str(data.get("max_colors",16)));self.fit_mode.setCurrentText(data.get("fit_mode",FitMode.FILL.value));self.dither.setCurrentText(data.get("dither",DitherMode.OFF.value))
         self.brightness.slider.setValue(data.get("brightness",0));self.contrast.slider.setValue(data.get("contrast",0));self.saturation.slider.setValue(data.get("saturation",0));self.drill_size.setValue(data.get("drill_mm",2.5))
         self.preserve_transparency.setChecked(data.get("preserve_transparency",False))
+        self.only_owned.setChecked(data.get("only_use_owned_colors",False))
 
     def _confirm_discard(self):
         if not self.dirty:return True
@@ -373,14 +417,5 @@ class MainWindow(QMainWindow):
     def _open_latest_log(self):
         if not get_log_path().exists() or not QDesktopServices.openUrl(QUrl.fromLocalFile(str(get_log_path()))):QMessageBox.warning(self,"Diagnostics","The latest log could not be opened.")
     def _copy_diagnostic_summary(self):
-        current={"Pattern":f"{self.pattern.width} x {self.pattern.height}" if self.pattern else "None","Maximum colors":self.colors.currentText(),"Colors used":len(self.pattern.usage) if self.pattern else 0,"Transparency":self.preserve_transparency.isChecked()}
+        current={"Pattern":f"{self.pattern.width} x {self.pattern.height}" if self.pattern else "None","Maximum colors":self.colors.currentText(),"Colors used":len(self.pattern.usage) if self.pattern else 0,"Transparency":self.preserve_transparency.isChecked(),"Owned Color Inventory":str(self.inventory.path),"Owned colors":len(self.inventory.owned)}
         QApplication.clipboard().setText(diagnostic_summary(**current));self.statusBar().showMessage("Diagnostic summary copied")
-
-def run():
-    configure_logging();install_exception_hooks();previous_abnormal=begin_session();app=SafeApplication(sys.argv);app.setApplicationName("Drillbit");app.setOrganizationName("Drillbit");install_exception_hooks(_crash_dialog);app.aboutToQuit.connect(end_session)
-    window=MainWindow();window.show()
-    if previous_abnormal:
-        def offer_logs():
-            if QMessageBox.question(window,"Previous Session","Drillbit did not close normally last time. Open diagnostic logs?")==QMessageBox.StandardButton.Yes:window._open_log_folder()
-        QTimer.singleShot(0,offer_logs)
-    return app.exec()

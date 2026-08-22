@@ -28,6 +28,9 @@ class ReferencePalette:
         code=min(self._labs,key=lambda key: sum((a-b)**2 for a,b in zip(lab,self._labs[key])))
         return self.by_code[code]
 
+    def subset(self,codes,name=None):
+        allowed=set(codes);return ReferencePalette(name or self.name,[color for color in self.colors if color.code in allowed],self.source,self.accuracy_note)
+
 def palette_path(filename="dmc.json"):
     import sys
     base=Path(getattr(sys,"_MEIPASS",Path(__file__).resolve().parent.parent))

@@ -22,6 +22,12 @@ Version 0.8 adds printable PDF symbols and dedicated legends without changing th
 
 Version 0.8.1 makes symbolized PDFs responsive in common viewers. Each chart tile is rendered once as a lossless 600-DPI image and embedded at the exact physical size dictated by the drill pitch. The searchable legend, calibration squares, footer, and registration marks remain vector PDF content. Export logging records per-tile raster, symbol, encoding, embedding, and final-save timings without logging individual cells.
 
+Version 0.9 makes Drillbit a per-user single-instance Windows application. A second launch sends a length-prefixed JSON activation request through Qt local IPC and exits, while the running window restores, raises, and requests focus. Image and `.diamond` command-line paths are forwarded to the existing window and pass through the normal unsaved-work confirmation flow. Bounded connection retries and verified stale-endpoint cleanup cover rapid double-clicks and abnormal exits.
+
+Version 1.0 adds **Colors I Own**, a persistent personal DMC inventory. Use **Manage Colors I Own** to search by code or name, select colors, review owned colors, or clear the inventory. Enable **Only Use Colors I Own** to restrict the next automatic conversion or regeneration to that set; if fewer colors are owned than the requested maximum, Drillbit uses the owned count as the effective limit. Existing and manually edited patterns are never changed merely because inventory selections change, and the manual editor continues to offer every DMC color with owned colors marked by a check.
+
+The inventory is global rather than part of a `.diamond` project and is stored at `%LOCALAPPDATA%\Drillbit\owned_colors.json`, so it survives executable rebuilds and application updates. To reset it outside Drillbit, close the application and delete that file. The next launch starts with an empty inventory. If the file is corrupt, Drillbit preserves it, logs the parse failure, and safely starts with an empty inventory.
+
 ## Run from source
 
 Python 3.11–3.13 is recommended for packaging. A project-local portable Python 3.13 runtime is included for reproducible builds because Python 3.14 currently has a Qt/PyInstaller DLL packaging incompatibility.
@@ -60,6 +66,7 @@ The build script creates the environment, installs dependencies, tests, and invo
 - `app/pattern_converter.py` — adjusted image to DMC logical-pattern conversion
 - `app/pattern_analysis.py` — connected-region analysis foundation
 - `app/project_io.py` — self-contained `.diamond` save/load
+- `app/inventory.py` / `app/widgets/inventory_dialog.py` — persistent Colors I Own storage and searchable manager
 - `app/widgets/pattern_editor.py` / `editor_panel.py` — efficient custom-rendered editor and controls
 - `app/models.py` — settings/palette models
 - `app/widgets/` — reusable UI
